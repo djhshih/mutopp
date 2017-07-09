@@ -63,7 +63,7 @@ fn main() {
         print_cds(record.seq(), true);
         print_protein(record.seq());
 
-        let opp = accum_opp(&[record.seq()], 0).unwrap();
+        let opp = count_opp(&[record.seq()], 0).unwrap();
         print_opp_matrix(&opp);
 
         println!("");
@@ -212,7 +212,8 @@ fn translate(dna: &[u8]) -> Vec<u8> {
 // Trp / W  TGG
 // Tyr / Y  TAT TAC
 // Val / V  GTT GTC GTA GTG
-// Ter / *  TAA TGA TAG
+// Ter / $  TAA TGA TAG
+// Additionally, '^' will be used to denote the start amino acid in other parts
 fn codon_to_aa(codon: &[u8; 3]) -> u8 {
     match codon {
         b"GCT" | b"GCC" | b"GCA" | b"GCG" => b'A',
@@ -235,7 +236,7 @@ fn codon_to_aa(codon: &[u8; 3]) -> u8 {
         b"TGG" => b'W',
         b"TAT" | b"TAC" => b'Y',
         b"GTT" | b"GTC" | b"GTA" | b"GTG" => b'V',
-        b"TAA" | b"TGA" | b"TAG" => b'*',
+        b"TAA" | b"TGA" | b"TAG" => b'$',
         _ => b'X',
     }
 }
@@ -251,7 +252,7 @@ const n_mutation_channels: usize = n_substitution_types * n_nucleotides * n_nucl
 enum MutationClass {
     Synonymous,
     Missense,
-    Nonsense,
+    StartOrStop,
     SpliceSite,
 }
 const n_mutation_classes: usize = 4;
@@ -259,7 +260,7 @@ const n_mutation_classes: usize = 4;
 impl MutationClass {
     pub fn iter() -> Iter<'static, MutationClass> {
         use self::MutationClass::*;
-        static classes: [MutationClass; n_mutation_classes] = [Synonymous, Missense, Nonsense, SpliceSite];
+        static classes: [MutationClass; n_mutation_classes] = [Synonymous, Missense, StartOrStop, SpliceSite];
         classes.into_iter()
     }
 }
@@ -269,7 +270,7 @@ impl fmt::Display for MutationClass {
         let c = match *self {
             MutationClass::Synonymous => "syn",
             MutationClass::Missense => "mis",
-            MutationClass::Nonsense => "nns",
+            MutationClass::StartOrStop => "sos",
             MutationClass::SpliceSite => "spl",
         };
 
@@ -474,22 +475,66 @@ impl CodingSeqs {
 }
 */
 
-/// Accmulate mutation opportunities.
-/// CDS must be a contiguous sequence in the genome (i.e. exons are not joined together).
-/// Multiple CDS's should be analyzed by repeated calling this function.
+fn cds_is_valid(seqs: &[&[u8]], padding: usize) -> bool {
+    let mut valid = true;
+
+    let mut total_cds_len = 0;
+
+    let nseqs = seqs.len();
+    for s in 0 .. nseqs {
+        let seq = seqs[s];
+        let seq_len = seq.len();
+        if seq_len <= 2 * padding {
+            // after removing padding, no CDS sequence is left
+            valid = false;
+            break;
+        }
+        // substract upstream and upstream padding
+        let cds_len = seq_len - (2 * padding);  
+        total_cds_len += cds_len;
+    }
+
+    // joined CDS should be a multiple of 3
+    if total_cds_len % 3 != 0 {
+        valid = false;
+    }
+
+    // check for presense of stop codon at the final position using the standard genetic code
+    {
+        let seq = seqs[nseqs-1];
+        let end = seq.len() - padding;
+        let codon = [seq[end-3], seq[end-2], seq[end-1]];
+        if codon_to_aa(&codon) != b'$' {
+            valid = false;
+        }
+    }
+     
+    // not checked: presence of premature stop codon due to computation cost (TODO)
+    // not checked: start codon sequence, because there are many alternative start codons
+
+    valid
+}
+
+/// Count mutation opportunities.
+/// Each CDS must be a contiguous sequence in the genome (i.e. exons are not joined together).
 /// If exons have been joined together to form the CDS, then mutations at exon-exon junctions will
 /// be likely be incorrectly counted toward the wrong mutation context channel.
 /// CDS may optionally include upstream and downstream sequences, the sizes of which are specified
 /// by `padding`. These sequences are required for counting mutation
 /// opportunities at the first and last positions, as well as counting mutation opportunities at
 /// splice sites (first and last 2 bp of each intron).
-fn accum_opp(seqs: &[&[u8]], padding: usize) -> Option<[u32; n_mutation_types]> {
+/// Splice sites will not be counted unless `padding >= 3`, because splice sites are the first
+/// and last 2 bp of each intron and at least one nucleotide context is needed to count the last
+/// nucleotide of the splice donor and the first nucleotide of the splice acceptor.
+fn count_opp(seqs: &[&[u8]], padding: usize) -> Option<[u32; n_mutation_types]> {
 
     let nseqs = seqs.len();
 
     let mut x = new_opp_matrix();
     let mut offset = 0;
     let mut error = false;
+
+    // count mutations in each CDS
 
     for s in 0 .. nseqs {
         let seq = seqs[s];
@@ -499,12 +544,19 @@ fn accum_opp(seqs: &[&[u8]], padding: usize) -> Option<[u32; n_mutation_types]> 
         // CDS length might not be a mutiple of 3, because the CDS may span multiple exons, resulting
         // in mutiple disjoint CDS regions, which are processed one at a time
 
-        let mut i = offset + padding;
+        let cds_begin = offset + padding;
+        let mut i = cds_begin;
         // step through the first nucleotide of each codon
         while i < cds_end {
             let codon_ref: [u8; 3] = [seq[i], seq[i+1], seq[i+2]];
             // translate codon
-            let aa_ref = codon_to_aa(&codon_ref);
+            let aa_ref = if s == 0 && i == cds_begin {
+                // first codon of the first CDS is the start codon
+                // this is usually ATG but alternative start codons are possible
+                b'^'
+            } else {
+                codon_to_aa(&codon_ref)
+            };
             // iterate through each position of the codon
             for j in 0 .. 3 {
                 let ii = i + j;
@@ -527,6 +579,7 @@ fn accum_opp(seqs: &[&[u8]], padding: usize) -> Option<[u32; n_mutation_types]> 
                 // there are no more CDS... yet the last codon is complete
                 // there is an error with the sequences
                 error = true;
+                break;
             } else {
                 let seq2 = seqs[s+1];
                 let cds2_len = seq2.len() - (2 * padding);
@@ -534,6 +587,7 @@ fn accum_opp(seqs: &[&[u8]], padding: usize) -> Option<[u32; n_mutation_types]> 
                     // there are not enough nucleotides in the next CDS to complete the codon... 
                     // this is an error with the sequences
                     error = true;
+                    break;
                 } else {
                     // complete the last codon, using nucleotides from the next CDS
                     let i = cds_len - remainder;
@@ -593,10 +647,50 @@ fn accum_opp(seqs: &[&[u8]], padding: usize) -> Option<[u32; n_mutation_types]> 
 
     } // for seq
 
+    // count mutations in the splice site
+    if !error {
+        count_opp_at_splice_sites(&mut x, seqs, padding)
+    }
+
     if error {
         None
     } else {
         Some(x)
+    }
+}
+
+fn count_opp_at_splice_sites(mut x: &mut [u32; n_mutation_types], seqs: &[&[u8]], padding: usize) {
+    if padding >= 3 {
+        let nseqs = seqs.len();
+        for s in 0 .. nseqs {
+            let seq = seqs[s];
+
+            // process splice acceptor site if it is not the first CDS
+            if s != 0 {
+                count_opp_at_slice_site(&mut x, seq, padding - 2);
+            }
+
+            // process splice donor site if it is not the last CDS
+            if s != nseqs - 1 {
+                count_opp_at_slice_site(&mut x, seq, seq.len() - padding);
+            }
+        }
+    }
+}
+
+fn count_opp_at_slice_site(x: &mut [u32; n_mutation_types], seq: &[u8], begin: usize) {
+    let splice =  MutationClass::SpliceSite;
+    // iterate through the 2 positions of the splice site
+    for j in 0 .. 2 {
+        let context_5p = seq[begin-1+j];
+        let nt_ref = seq[begin+j];
+        let context_3p = seq[begin+1+j];
+        for &nt_alt in nucleotides.iter() {
+            if nt_alt != nt_ref {
+                let idx = mutation_type_index(splice, nt_ref, nt_alt, context_5p, context_3p);
+                x[idx] += 1;
+            }
+        }
     }
 }
 
@@ -609,14 +703,21 @@ fn count_opp_at_codon_pos(x: &mut [u32; n_mutation_types], pos: usize, codon: &[
     // iterate through possible substitutions
     for &nt_alt in nucleotides.iter() {
         if nt_alt != nt_ref {
-            let codon_alt = mutate_codon(&codon, pos, nt_alt);
-            let aa_alt = codon_to_aa(&codon_alt);
-            let cl = if aa_alt == aa_ref {
-                MutationClass::Synonymous 
-            } else if aa_alt == b'*' {
-                MutationClass::Nonsense
+            let cl = if aa_ref == b'^' {
+                // assume that any mutation at start codon causes start codon loss
+                // this is true for ATG start codon (no degeneracy) and
+                // probably true for alternative start codons as well
+                MutationClass::StartOrStop
             } else {
-                MutationClass::Missense
+                let codon_alt = mutate_codon(&codon, pos, nt_alt);
+                let aa_alt = codon_to_aa(&codon_alt);
+                if aa_alt == aa_ref {
+                    MutationClass::Synonymous 
+                } else if aa_ref == b'$' || aa_alt == b'$' {
+                    MutationClass::StartOrStop
+                } else {
+                    MutationClass::Missense
+                }
             };
             let idx = mutation_type_index(cl, nt_ref, nt_alt, context[0], context[2]);
             x[idx] += 1;
@@ -631,5 +732,306 @@ fn mutate_codon(codon: &[u8; 3], pos: usize, nt_alt: u8) -> [u8; 3] {
     codon_new[pos] = nt_alt;
 
     codon_new
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_count_opp_pad0() {
+        // sequences contain only CDS without any padding
+        let test: &[&[u8]] = &[
+            b"ATGATG",
+            b"ATGATGATG",
+            b"ATGATGATGATGTAG",
+        ];
+        let out = count_opp(test, 0).expect("Invalid opportunity array");
+        
+        // since no 5' or 3' padding is available, the first and last nucleotides
+        // of each CDS have no context, and they are therefore not counted
+
+        let mut ans = new_opp_matrix();
+
+        // mutations in position 2 of start codon (ATG) with context ATG
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'A', b'A', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'C', b'A', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'G', b'A', b'G')] = 1;
+
+        // mutations in position 3 of start codon (ATG) with context TGA
+        ans[mutation_type_index(MutationClass::StartOrStop, b'G', b'A', b'T', b'A')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'G', b'C', b'T', b'A')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'G', b'T', b'T', b'A')] = 1;
+
+        // mutations in TGA context (except involving start codon)
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'A', b'T', b'A')] = 5;
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'C', b'T', b'A')] = 5;
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'T', b'T', b'A')] = 5;
+
+        // mutations in GAT context
+        ans[mutation_type_index(MutationClass::Missense, b'A', b'C', b'G', b'T')] = 6;
+        ans[mutation_type_index(MutationClass::Missense, b'A', b'G', b'G', b'T')] = 6;
+        ans[mutation_type_index(MutationClass::Missense, b'A', b'T', b'G', b'T')] = 6;
+
+        // mutations in ATG context (except involving start codon)
+        ans[mutation_type_index(MutationClass::Missense, b'T', b'A', b'A', b'G')] = 8;
+        ans[mutation_type_index(MutationClass::Missense, b'T', b'C', b'A', b'G')] = 8;
+        ans[mutation_type_index(MutationClass::Missense, b'T', b'G', b'A', b'G')] = 8;
+
+        // mutation in position 3 of penultimate codon (ATG) with context TGT
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'A', b'T', b'T')] = 1;
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'C', b'T', b'T')] = 1;
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'T', b'T', b'T')] = 1;
+
+        // mutation in position 1 of stop codon (TAG) with context GTA
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'A', b'G', b'A')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'C', b'G', b'A')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'G', b'G', b'A')] = 1;
+
+        // mutation in position 2 of stop codon (TAG) with context TAG
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'C', b'T', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'G', b'T', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'T', b'T', b'G')] = 1;
+
+        // discard length information from type s.t. compiler does not complain
+        let pout: &[u32] = &out;
+        let pans: &[u32] = &ans;
+
+        assert_eq!(pout, pans);
+    }
+
+    #[test]
+    fn test_count_opp_pad1() {
+        // sequences contain CDS with 1 nucleotide padding
+        let test: &[&[u8]] = &[
+            b"CATGATGC",
+            b"CATGATGATGC",
+            b"CATGATGATGATGTAGC",
+        ];
+        let out = count_opp(test, 1).expect("Invalid opportunity array");
+        
+        // the result should be similar to the first test,
+        // except now that first and last nucleotides are each CDS have
+        // 5' and 3' context and are thus counted
+
+        let mut ans = new_opp_matrix();
+
+        // mutations in position 2 of start codon (ATG) with context ATG
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'A', b'A', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'C', b'A', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'G', b'A', b'G')] = 1;
+
+        // mutations in position 3 of start codon (ATG) with context TGA
+        ans[mutation_type_index(MutationClass::StartOrStop, b'G', b'A', b'T', b'A')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'G', b'C', b'T', b'A')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'G', b'T', b'T', b'A')] = 1;
+
+        // mutations in TGA context (except involving start codon)
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'A', b'T', b'A')] = 5;
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'C', b'T', b'A')] = 5;
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'T', b'T', b'A')] = 5;
+
+        // mutations in GAT context
+        ans[mutation_type_index(MutationClass::Missense, b'A', b'C', b'G', b'T')] = 6;
+        ans[mutation_type_index(MutationClass::Missense, b'A', b'G', b'G', b'T')] = 6;
+        ans[mutation_type_index(MutationClass::Missense, b'A', b'T', b'G', b'T')] = 6;
+
+        // mutations in ATG context (except involving start codon)
+        ans[mutation_type_index(MutationClass::Missense, b'T', b'A', b'A', b'G')] = 8;
+        ans[mutation_type_index(MutationClass::Missense, b'T', b'C', b'A', b'G')] = 8;
+        ans[mutation_type_index(MutationClass::Missense, b'T', b'G', b'A', b'G')] = 8;
+
+        // mutation in position 3 of penultimate codon (ATG) with context TGT
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'A', b'T', b'T')] = 1;
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'C', b'T', b'T')] = 1;
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'T', b'T', b'T')] = 1;
+
+        // mutation in position 1 of stop codon (TAG) with context GTA
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'A', b'G', b'A')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'C', b'G', b'A')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'G', b'G', b'A')] = 1;
+
+        // mutation in position 2 of stop codon (TAG) with context TAG
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'C', b'T', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'G', b'T', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'T', b'T', b'G')] = 1;
+
+        // additional mutations counted in test2 but not in test1
+
+        // mutaiton in first nucleotide of start codon with context CAT
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'C', b'C', b'T')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'G', b'C', b'T')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'T', b'C', b'T')] = 1;
+
+        // mutaiton in first nucleotide of CDS 2 and 3 with context CAT
+        ans[mutation_type_index(MutationClass::Missense, b'A', b'C', b'C', b'T')] = 2;
+        ans[mutation_type_index(MutationClass::Missense, b'A', b'G', b'C', b'T')] = 2;
+        ans[mutation_type_index(MutationClass::Missense, b'A', b'T', b'C', b'T')] = 2;
+
+        // mutation last nucleotide of CDS 1 and 2 with context TGC
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'A', b'T', b'C')] = 2;
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'C', b'T', b'C')] = 2;
+        ans[mutation_type_index(MutationClass::Missense, b'G', b'T', b'T', b'C')] = 2;
+
+        // mutation in position 3 of stop codon (TAG -> TAA) with context AGC
+        ans[mutation_type_index(MutationClass::StartOrStop, b'G', b'C', b'A', b'C')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'G', b'T', b'A', b'C')] = 1;
+
+        // synonymous mutation in position 3 of stop codon (TAG -> TAA) with context AGC
+        ans[mutation_type_index(MutationClass::Synonymous, b'G', b'A', b'A', b'C')] = 1;
+
+        // discard length information from type s.t. compiler does not complain
+        let pout: &[u32] = &out;
+        let pans: &[u32] = &ans;
+
+        assert_eq!(pout, pans);
+    }
+
+    #[test]
+    fn test_count_opp_splice() {
+        // sequences contain CDS with 3 nucleotide padding,
+        // permitting splice site mutation opportunity counting
+        let test: &[&[u8]] = &[
+            b"ACCATGCCCCCCGTA",
+            b"CAGCCCCCCGTG",
+            b"TAGCCCCCCGTA",
+            b"AAGCCCCCCGTG",
+            b"GCACCCCCCTAGCCC",
+        ];
+        let out = count_opp(test, 3).expect("Invalid opportunity array");
+
+        let mut ans = new_opp_matrix();
+
+        // donor splice site mutations
+
+        // two cGTa and two cGTg donor splice sites, mutation at position 1  with context CGT
+        ans[mutation_type_index(MutationClass::SpliceSite, b'G', b'A', b'C', b'T')] = 4;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'G', b'C', b'C', b'T')] = 4;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'G', b'T', b'C', b'T')] = 4;
+
+        // two cGTa donor splice sites, mutation at position 2 with context GTA
+        ans[mutation_type_index(MutationClass::SpliceSite, b'T', b'A', b'G', b'A')] = 2;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'T', b'C', b'G', b'A')] = 2;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'T', b'G', b'G', b'A')] = 2;
+
+        // two cGTg donor splice sites, mutation at position 2 with context GTG
+        ans[mutation_type_index(MutationClass::SpliceSite, b'T', b'A', b'G', b'G')] = 2;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'T', b'C', b'G', b'G')] = 2;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'T', b'G', b'G', b'G')] = 2;
+
+        // acceptor splice site mutations
+
+        // cAGc acceptor site, mutation at position 1 with context CAG
+        ans[mutation_type_index(MutationClass::SpliceSite, b'A', b'C', b'C', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'A', b'T', b'C', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'A', b'G', b'C', b'G')] = 1;
+
+        // tAGc acceptor site, mutation at position 1 with context TAG
+        ans[mutation_type_index(MutationClass::SpliceSite, b'A', b'C', b'T', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'A', b'T', b'T', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'A', b'G', b'T', b'G')] = 1;
+
+        // aAGc acceptor site, mutation at position 1 with context AAG
+        ans[mutation_type_index(MutationClass::SpliceSite, b'A', b'C', b'A', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'A', b'T', b'A', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'A', b'G', b'A', b'G')] = 1;
+
+        // cAGc, tAGc, and aAGc acceptor sites, mutation at position 2 with context AGC
+        ans[mutation_type_index(MutationClass::SpliceSite, b'G', b'A', b'A', b'C')] = 3;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'G', b'C', b'A', b'C')] = 3;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'G', b'T', b'A', b'C')] = 3;
+
+        // gCAc acceptor site, mutation at position 1 with context GCA
+        ans[mutation_type_index(MutationClass::SpliceSite, b'C', b'A', b'G', b'A')] = 1;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'C', b'T', b'G', b'A')] = 1;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'C', b'G', b'G', b'A')] = 1;
+
+        // gCAc acceptor site, mutation at position 2 with context CAC
+        ans[mutation_type_index(MutationClass::SpliceSite, b'A', b'C', b'C', b'C')] = 1;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'A', b'G', b'C', b'C')] = 1;
+        ans[mutation_type_index(MutationClass::SpliceSite, b'A', b'T', b'C', b'C')] = 1;
+
+        // start codon mutations
+
+        // start codon mutations, position 1 with context CAT
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'C', b'C', b'T')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'G', b'C', b'T')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'T', b'C', b'T')] = 1;
+
+        // start codon mutations, position 2 with context ATG
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'A', b'A', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'C', b'A', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'G', b'A', b'G')] = 1;
+
+        // start codon mutations, position 3 with context TGC
+        ans[mutation_type_index(MutationClass::StartOrStop, b'G', b'A', b'T', b'C')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'G', b'C', b'T', b'C')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'G', b'T', b'T', b'C')] = 1;
+
+        // stop codon mutations, position 1 with context CTA
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'A', b'C', b'A')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'C', b'C', b'A')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'T', b'G', b'C', b'A')] = 1;
+
+        // stop codon mutations, position 2 with context TAG
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'C', b'T', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'G', b'T', b'G')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'A', b'T', b'T', b'G')] = 1;
+
+        // stop codon mutations, position 3 with context AGC
+        // TAG -> TAA is synonymous stop codon mutation
+        ans[mutation_type_index(MutationClass::StartOrStop, b'G', b'C', b'A', b'C')] = 1;
+        ans[mutation_type_index(MutationClass::StartOrStop, b'G', b'T', b'A', b'C')] = 1;
+
+        // synonymous mutations
+        
+        // stop codon mutations, position 3 with context AGC
+        // TAG -> TAA is synonymous stop codon mutation
+        ans[mutation_type_index(MutationClass::Synonymous, b'G', b'A', b'A', b'C')] = 1;
+        
+        // position 3 mutations in codon CCC are synonymous
+        // CCC -> CCA, CCG, CCT (all code for Proline)
+
+        // context CCC (first CCC codon of ech of 5 CDS's)
+        ans[mutation_type_index(MutationClass::Synonymous, b'C', b'A', b'C', b'C')] = 5;
+        ans[mutation_type_index(MutationClass::Synonymous, b'C', b'G', b'C', b'C')] = 5;
+        ans[mutation_type_index(MutationClass::Synonymous, b'C', b'T', b'C', b'C')] = 5;
+        
+        // context CCG (last codon of each of 4 CDS's)
+        ans[mutation_type_index(MutationClass::Synonymous, b'C', b'A', b'C', b'G')] = 4;
+        ans[mutation_type_index(MutationClass::Synonymous, b'C', b'G', b'C', b'G')] = 4;
+        ans[mutation_type_index(MutationClass::Synonymous, b'C', b'T', b'C', b'G')] = 4;
+
+        // context CCT (codon before stop codon TAG)
+        ans[mutation_type_index(MutationClass::Synonymous, b'C', b'A', b'C', b'T')] = 1;
+        ans[mutation_type_index(MutationClass::Synonymous, b'C', b'G', b'C', b'T')] = 1;
+        ans[mutation_type_index(MutationClass::Synonymous, b'C', b'T', b'C', b'T')] = 1;
+        
+        // missense mutations
+        
+        // position 1 mutations in codon CCC: 5 codons with context CCC
+        // (second codon of each of 5 CDS's)
+        // position 2 mutations in codon CCC: 10 CCC codons with context CCC
+        ans[mutation_type_index(MutationClass::Missense, b'C', b'A', b'C', b'C')] = 15;
+        ans[mutation_type_index(MutationClass::Missense, b'C', b'G', b'C', b'C')] = 15;
+        ans[mutation_type_index(MutationClass::Missense, b'C', b'T', b'C', b'C')] = 15;
+
+        // position 1 mutation in codon CCC with context GCC (first codon of each of CDS 1-4)
+        ans[mutation_type_index(MutationClass::Missense, b'C', b'A', b'G', b'C')] = 4;
+        ans[mutation_type_index(MutationClass::Missense, b'C', b'G', b'G', b'C')] = 4;
+        ans[mutation_type_index(MutationClass::Missense, b'C', b'T', b'G', b'C')] = 4;
+
+        // position 1 mutation in codon CCC with context ACC (first codon of CDS 5)
+        ans[mutation_type_index(MutationClass::Missense, b'C', b'A', b'A', b'C')] = 1;
+        ans[mutation_type_index(MutationClass::Missense, b'C', b'G', b'A', b'C')] = 1;
+        ans[mutation_type_index(MutationClass::Missense, b'C', b'T', b'A', b'C')] = 1;
+
+        // discard length information from type s.t. compiler does not complain
+        let pout: &[u32] = &out;
+        let pans: &[u32] = &ans;
+
+        assert_eq!(pout, pans);
+    }
+
 }
 
