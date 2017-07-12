@@ -96,7 +96,8 @@ fn main() {
         /*
         print_protein(record.seq());
 
-        let opp = count_opp(&[record.seq()], 0).unwrap();
+        let cds = CodingSequence { seqs: vec![record.seq()], padding: 0 };
+        let opp = cds.count_opp().unwrap();
         print_opp_matrix(&opp);
         */
 
@@ -150,7 +151,7 @@ fn main() {
             for seq in &cds.seqs {
                 print_seq(seq);
             }
-            let opp = count_opp(&cds.seqs, cds.padding).unwrap();
+            let opp = cds.count_opp().unwrap();
             print_opp_matrix(&opp);
         }
     }
@@ -634,157 +635,163 @@ fn cds_is_valid(seqs: &Vec<Seq>, padding: usize) -> bool {
     valid
 }
 
+impl CodingSequence {
 
-/// Count mutation opportunities.
-///
-/// Each CDS must be a contiguous sequence in the genome (i.e. exons are not joined together).
-/// If exons have been joined together to form the CDS, then mutations at exon-exon junctions will
-/// be likely be incorrectly counted toward the wrong mutation context channel.
-/// CDS may optionally include upstream and downstream sequences, the sizes of which are specified
-/// by `padding`. These sequences are required for counting mutation
-/// opportunities at the first and last positions, as well as counting mutation opportunities at
-/// splice sites (first and last 2 bp of each intron).
-/// Splice sites will not be counted unless `padding >= 3`, because splice sites are the first
-/// and last 2 bp of each intron and at least one nucleotide context is needed to count the last
-/// nucleotide of the splice donor and the first nucleotide of the splice acceptor.
-fn count_opp(seqs: &Vec<Vec<u8>>, padding: usize) -> Option<MutOppArray> {
+    /// Count mutation opportunities.
+    ///
+    /// Each CDS must be a contiguous sequence in the genome (i.e. exons are not joined together).
+    /// If exons have been joined together to form the CDS, then mutations at exon-exon junctions will
+    /// be likely be incorrectly counted toward the wrong mutation context channel.
+    /// CDS may optionally include upstream and downstream sequences, the sizes of which are specified
+    /// by `padding`. These sequences are required for counting mutation
+    /// opportunities at the first and last positions, as well as counting mutation opportunities at
+    /// splice sites (first and last 2 bp of each intron).
+    /// Splice sites will not be counted unless `padding >= 3`, because splice sites are the first
+    /// and last 2 bp of each intron and at least one nucleotide context is needed to count the last
+    /// nucleotide of the splice donor and the first nucleotide of the splice acceptor.
+    fn count_opp(&self) -> Option<MutOppArray> {
 
-    let nseqs = seqs.len();
+        let seqs = &self.seqs;
+        let padding = self.padding;
+        let nseqs = seqs.len();
 
-    let mut x = new_opp_matrix();
-    let mut offset = 0;
-    let mut error = false;
+        let mut x = new_opp_matrix();
+        let mut offset = 0;
+        let mut error = false;
 
-    // count mutations in each CDS
+        // count mutations in each CDS
 
-    for s in 0 .. nseqs {
-        let seq = &seqs[s];
-        let seq_len = seq.len();
-        let cds_end = seq_len - padding;  // substract downstream padding
-        let cds_len = cds_end - padding;  // substract upstream padding
-        // CDS length might not be a mutiple of 3, because the CDS may span multiple exons, resulting
-        // in mutiple disjoint CDS regions, which are processed one at a time
+        for s in 0 .. nseqs {
+            let seq = &seqs[s];
+            let seq_len = seq.len();
+            let cds_end = seq_len - padding;  // substract downstream padding
+            let cds_len = cds_end - padding;  // substract upstream padding
+            // CDS length might not be a mutiple of 3, because the CDS may span multiple exons, resulting
+            // in mutiple disjoint CDS regions, which are processed one at a time
 
-        let cds_begin = offset + padding;
-        let mut i = cds_begin;
-        // step through the first nucleotide of each codon
-        while i < cds_end - 2 {
-            let codon_ref: [u8; 3] = [seq[i], seq[i+1], seq[i+2]];
-            // translate codon
-            let aa_ref = if s == 0 && i == cds_begin {
-                // first codon of the first CDS is the start codon
-                // this is usually ATG but alternative start codons are possible
-                b'^'
-            } else {
-                codon_to_aa(&codon_ref)
-            };
-            // iterate through each position of the codon
-            for j in 0 .. 3 {
-                let ii = i + j;
-                // ii-1 and ii+1 need to be valid indices
-                if ii > 0 && ii < seq_len - 1 {
-                    let context: [u8; 3] = [seq[ii-1], seq[ii], seq[ii+1]];
-                    count_opp_at_codon_pos(&mut x, j, &codon_ref, aa_ref, &context);
+            let cds_begin = offset + padding;
+            let mut i = cds_begin;
+            // step through the first nucleotide of each codon
+            while i < cds_end - 2 {
+                let codon_ref: [u8; 3] = [seq[i], seq[i+1], seq[i+2]];
+                // translate codon
+                let aa_ref = if s == 0 && i == cds_begin {
+                    // first codon of the first CDS is the start codon
+                    // this is usually ATG but alternative start codons are possible
+                    b'^'
+                } else {
+                    codon_to_aa(&codon_ref)
+                };
+                // iterate through each position of the codon
+                for j in 0 .. 3 {
+                    let ii = i + j;
+                    // ii-1 and ii+1 need to be valid indices
+                    if ii > 0 && ii < seq_len - 1 {
+                        let context: [u8; 3] = [seq[ii-1], seq[ii], seq[ii+1]];
+                        count_opp_at_codon_pos(&mut x, j, &codon_ref, aa_ref, &context);
+                    }
                 }
+                // go to next codon
+                i += 3;
             }
-            // go to next codon
-            i += 3;
-        }
 
-        // consider the case in which last codon of the current CDS extends into the next CDS:
-        // process this last codon by borrowing up to 2 nucleotides from the next CDS
-        let remainder = (cds_len - offset) % 3;
-        let needed = 3 - remainder;
-        if remainder != 0 {
-            if s == nseqs - 1 {
-                // there are no more CDS... yet the last codon is complete
-                // there is an error with the sequences
-                error = true;
-                break;
-            } else {
-                let seq2 = &seqs[s+1];
-                let cds2_len = seq2.len() - (2 * padding);
-                if cds2_len < needed {
-                    // there are not enough nucleotides in the next CDS to complete the codon... 
-                    // this is an error with the sequences
+            // consider the case in which last codon of the current CDS extends into the next CDS:
+            // process this last codon by borrowing up to 2 nucleotides from the next CDS
+            let remainder = (cds_len - offset) % 3;
+            let needed = 3 - remainder;
+            if remainder != 0 {
+                if s == nseqs - 1 {
+                    // there are no more CDS... yet the last codon is complete
+                    // there is an error with the sequences
                     error = true;
                     break;
                 } else {
-                    // complete the last codon, using nucleotides from the next CDS
-                    let i = cds_end - remainder;
-                    let i2 = padding;
+                    let seq2 = &seqs[s+1];
+                    let cds2_len = seq2.len() - (2 * padding);
+                    if cds2_len < needed {
+                        // there are not enough nucleotides in the next CDS to complete the codon... 
+                        // this is an error with the sequences
+                        error = true;
+                        break;
+                    } else {
+                        // complete the last codon, using nucleotides from the next CDS
+                        let i = cds_end - remainder;
+                        let i2 = padding;
 
-                    // remainder can only possibly be 1 or 2
-                    match remainder {
-                        1 => {
-                            let codon_ref: [u8; 3] = [seq[i], seq2[i2], seq2[i2+1]];
-                            let aa_ref = codon_to_aa(&codon_ref);
-                            // process position 1 of the codon (which is in the current CDS)
-                            if i < seq_len - 1 {
-                                let context: [u8; 3] = [seq[i-1], seq[i], seq[i+1]];
-                                count_opp_at_codon_pos(&mut x, 0, &codon_ref, aa_ref, &context);
-                            }
-                            // process position 2 of the codon (which is in the next CDS)
-                            if i2 > 0 {
-                                let context: [u8; 3] = [seq2[i2-1], seq2[i2], seq2[i2+1]];
-                                count_opp_at_codon_pos(&mut x, 1, &codon_ref, aa_ref, &context);
-                            }
-                            // process position 3 of the codon (which is in the next CDS)
-                            {
-                                let context: [u8; 3] = [seq2[i2], seq2[i2+1], seq2[i2+2]];
-                                count_opp_at_codon_pos(&mut x, 2, &codon_ref, aa_ref, &context);
-                            }
-                        },
-                        2 => {
-                            let codon_ref: [u8; 3] = [seq[i], seq[i+1], seq2[i2]];
-                            let aa_ref = codon_to_aa(&codon_ref);
-                            // process position 1 of the codon (which is in the current CDS)
-                            if i < seq_len - 1 {
-                                let context: [u8; 3] = [seq[i-1], seq[i], seq[i+1]];
-                                count_opp_at_codon_pos(&mut x, 0, &codon_ref, aa_ref, &context);
-                            }
-                            // process position 2 of the codon (which is in the current CDS)
-                            if i < seq_len - 2 {
-                                let context: [u8; 3] = [seq[i], seq[i+1], seq[i+2]];
-                                count_opp_at_codon_pos(&mut x, 1, &codon_ref, aa_ref, &context);
-                            }
-                            // process position 3 of the codon (which is in the next CDS)
-                            if i2 > 0 {
-                                let context: [u8; 3] = [seq2[i2-1], seq2[i2], seq2[i2+1]];
-                                count_opp_at_codon_pos(&mut x, 2, &codon_ref, aa_ref, &context);
-                            }
-                        },
-                        _ => panic!("remainder can only possibly be either 1 or 2")
-                    } // match remainder
-                } // cds2_len
-            } // if s
+                        // remainder can only possibly be 1 or 2
+                        match remainder {
+                            1 => {
+                                let codon_ref: [u8; 3] = [seq[i], seq2[i2], seq2[i2+1]];
+                                let aa_ref = codon_to_aa(&codon_ref);
+                                // process position 1 of the codon (which is in the current CDS)
+                                if i < seq_len - 1 {
+                                    let context: [u8; 3] = [seq[i-1], seq[i], seq[i+1]];
+                                    count_opp_at_codon_pos(&mut x, 0, &codon_ref, aa_ref, &context);
+                                }
+                                // process position 2 of the codon (which is in the next CDS)
+                                if i2 > 0 {
+                                    let context: [u8; 3] = [seq2[i2-1], seq2[i2], seq2[i2+1]];
+                                    count_opp_at_codon_pos(&mut x, 1, &codon_ref, aa_ref, &context);
+                                }
+                                // process position 3 of the codon (which is in the next CDS)
+                                {
+                                    let context: [u8; 3] = [seq2[i2], seq2[i2+1], seq2[i2+2]];
+                                    count_opp_at_codon_pos(&mut x, 2, &codon_ref, aa_ref, &context);
+                                }
+                            },
+                            2 => {
+                                let codon_ref: [u8; 3] = [seq[i], seq[i+1], seq2[i2]];
+                                let aa_ref = codon_to_aa(&codon_ref);
+                                // process position 1 of the codon (which is in the current CDS)
+                                if i < seq_len - 1 {
+                                    let context: [u8; 3] = [seq[i-1], seq[i], seq[i+1]];
+                                    count_opp_at_codon_pos(&mut x, 0, &codon_ref, aa_ref, &context);
+                                }
+                                // process position 2 of the codon (which is in the current CDS)
+                                if i < seq_len - 2 {
+                                    let context: [u8; 3] = [seq[i], seq[i+1], seq[i+2]];
+                                    count_opp_at_codon_pos(&mut x, 1, &codon_ref, aa_ref, &context);
+                                }
+                                // process position 3 of the codon (which is in the next CDS)
+                                if i2 > 0 {
+                                    let context: [u8; 3] = [seq2[i2-1], seq2[i2], seq2[i2+1]];
+                                    count_opp_at_codon_pos(&mut x, 2, &codon_ref, aa_ref, &context);
+                                }
+                            },
+                            _ => panic!("remainder can only possibly be either 1 or 2")
+                        } // match remainder
+                    } // cds2_len
+                } // if s
 
-            // skip nucleotides already processed for the next CDS
-            offset = needed;
+                // skip nucleotides already processed for the next CDS
+                offset = needed;
+            } else {
+                // the last codon of the current CDS is complete
+                offset = 0;
+            } // if remainder
+
+        } // for seq
+
+        // count mutations in the splice site
+        if !error {
+            count_opp_at_splice_sites(&mut x, self);
+        }
+
+        if error {
+            None
         } else {
-            // the last codon of the current CDS is complete
-            offset = 0;
-        } // if remainder
-
-    } // for seq
-
-    // count mutations in the splice site
-    if !error {
-        count_opp_at_splice_sites(&mut x, seqs, padding)
+            Some(x)
+        }
     }
 
-    if error {
-        None
-    } else {
-        Some(x)
-    }
 }
 
-fn count_opp_at_splice_sites(mut x: &mut MutOppArray, seqs: &Vec<Vec<u8>>, padding: usize) {
+fn count_opp_at_splice_sites(mut x: &mut MutOppArray, cds: &CodingSequence) {
+    let padding = cds.padding;
     if padding >= 3 {
-        let nseqs = seqs.len();
+        let nseqs = cds.seqs.len();
         for s in 0 .. nseqs {
-            let seq = &seqs[s];
+            let seq = &cds.seqs[s];
 
             // process splice acceptor site if it is not the first CDS
             if s != 0 {
@@ -862,12 +869,15 @@ mod test {
     #[test]
     fn test_count_opp_pad0() {
         // sequences contain only CDS without any padding
-        let test = vec![
-            b"ATGATG".to_vec(),
-            b"ATGATGATG".to_vec(),
-            b"ATGATGATGATGTAG".to_vec(),
-        ];
-        let out = count_opp(&test, 0).expect("Invalid opportunity array");
+        let test = CodingSequence {
+            seqs: vec![
+                b"ATGATG".to_vec(),
+                b"ATGATGATG".to_vec(),
+                b"ATGATGATGATGTAG".to_vec(),
+            ],
+            padding: 0
+        };
+        let out = test.count_opp().expect("Invalid opportunity array");
         
         // since no 5' or 3' padding is available, the first and last nucleotides
         // of each CDS have no context, and they are therefore not counted
@@ -924,12 +934,15 @@ mod test {
     #[test]
     fn test_count_opp_pad1() {
         // sequences contain CDS with 1 nucleotide padding
-        let test = vec![
-            b"CATGATGC".to_vec(),
-            b"CATGATGATGC".to_vec(),
-            b"CATGATGATGATGTAGC".to_vec(),
-        ];
-        let out = count_opp(&test, 1).expect("Invalid opportunity array");
+        let test = CodingSequence {
+            seqs: vec![
+                b"CATGATGC".to_vec(),
+                b"CATGATGATGC".to_vec(),
+                b"CATGATGATGATGTAGC".to_vec(),
+            ],
+            padding: 1
+        };
+        let out = test.count_opp().expect("Invalid opportunity array");
         
         // the result should be similar to the first test,
         // except now that first and last nucleotides are each CDS have
@@ -1011,12 +1024,15 @@ mod test {
     #[test]
     fn test_count_opp_pad0_split() {
         // sequences contain only CDS without any padding but with split codons
-        let test = vec![
-            b"ATGATGA".to_vec(),
-            b"TGATGATGAT".to_vec(),
-            b"GATGATGATGTAG".to_vec(),
-        ];
-        let out = count_opp(&test, 0).expect("Invalid opportunity array");
+        let test = CodingSequence {
+            seqs: vec![
+                b"ATGATGA".to_vec(),
+                b"TGATGATGAT".to_vec(),
+                b"GATGATGATGTAG".to_vec(),
+            ],
+            padding: 0
+        };
+        let out = test.count_opp().expect("Invalid opportunity array");
         
         // since no 5' or 3' padding is available, the first and last nucleotides
         // of each CDS have no context, and they are therefore not counted
@@ -1073,12 +1089,15 @@ mod test {
     #[test]
     fn test_count_opp_pad1_split() {
         // sequences contain CDS with 1 nucleotide padding and with split codons
-        let test = vec![
-            b"CATGATGAC".to_vec(),
-            b"CTGATGATGATC".to_vec(),
-            b"CGATGATGATGTAGC".to_vec(),
-        ];
-        let out = count_opp(&test, 1).expect("Invalid opportunity array");
+        let test = CodingSequence {
+            seqs: vec![
+                b"CATGATGAC".to_vec(),
+                b"CTGATGATGATC".to_vec(),
+                b"CGATGATGATGTAGC".to_vec(),
+            ],
+            padding: 1
+        };
+        let out = test.count_opp().expect("Invalid opportunity array");
         
         // the result should be similar to the first test,
         // except now that first and last nucleotides are each CDS have
@@ -1171,14 +1190,17 @@ mod test {
     fn test_count_opp_splice() {
         // sequences contain CDS with 3 nucleotide padding,
         // permitting splice site mutation opportunity counting
-        let test = vec![
-            b"ACCATGCCCCCCGTA".to_vec(),
-            b"CAGCCCCCCGTG".to_vec(),
-            b"TAGCCCCCCGTA".to_vec(),
-            b"AAGCCCCCCGTG".to_vec(),
-            b"GCACCCCCCTAGCCC".to_vec(),
-        ];
-        let out = count_opp(&test, 3).expect("Invalid opportunity array");
+        let test = CodingSequence {
+            seqs: vec![
+                b"ACCATGCCCCCCGTA".to_vec(),
+                b"CAGCCCCCCGTG".to_vec(),
+                b"TAGCCCCCCGTA".to_vec(),
+                b"AAGCCCCCCGTG".to_vec(),
+                b"GCACCCCCCTAGCCC".to_vec(),
+            ],
+            padding: 3
+        };
+        let out = test.count_opp().expect("Invalid opportunity array");
 
         let mut ans = new_opp_matrix();
 
