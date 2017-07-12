@@ -41,12 +41,34 @@ struct Region {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() < 3 {
-        println!("usage: mutopp <fasta> <gff3>");
+    if args.len() < 4 {
+        println!("usage: mutopp <fasta> <coord> <gff3>");
         process::exit(1);
     }
 
-    let fasta = match fasta::Reader::from_file(&args[1]) {
+    let fasta_fn = &args[1];
+    let coord = &args[2];
+    let gff_fn = &args[3];
+
+    // read only part of the fasta
+    let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
+        Err(why) => panic!("{:?}", why),
+        Ok(reader) => reader,
+    };
+
+    if let Some((seqname, start, end)) = parse_coordinate(coord) {
+        println!("{} {} {}", seqname, start, end);
+        let mut seq: Vec<u8> = Vec::new();
+        match ifasta.read(&seqname, start, end, &mut seq) {
+            Err(why) => panic!("{:?}", why),
+            Ok(()) => print_seq(&seq),
+        }
+    } else {
+        panic!("Invalid coordinate: {}", coord);
+    }
+
+    // read the entire fasta
+    let fasta = match fasta::Reader::from_file(fasta_fn) {
         Err(why) => panic!("{:?}", why),
         Ok(reader) => reader,
     };
@@ -60,7 +82,7 @@ fn main() {
 
         println!("{}", record.id());
         println!("{}", desc);
-        print_cds(record.seq(), true);
+        print_cds(record.seq());
         print_protein(record.seq());
 
         let opp = count_opp(&[record.seq()], 0).unwrap();
@@ -69,9 +91,10 @@ fn main() {
         println!("");
     }
 
+
     // extract gene annotation from gff into struct Gene
 
-    let mut gff = match gff::Reader::from_file(&args[2], gff::GffType::GFF3) {
+    let mut gff = match gff::Reader::from_file(gff_fn, gff::GffType::GFF3) {
         Err(why) => panic!("{:?}", why),
         Ok(reader) => reader,
     };
@@ -133,33 +156,67 @@ fn main() {
     */
 }
 
-fn print_cds(x: &[u8], format: bool) {
+/// Parse genomic coordinate.
+///
+/// Assume coordinate is specified in 1-based, closed format.
+/// Internally, coordinate is converted to 0-based, half-open format.
+///
+fn parse_coordinate(x: &str) -> Option<(String, u64, u64)> {
+    match x.find(':') {
+        Some(i) => {
+            let seqname = &x[..i];
+            let range = &x[i+1..];
+            match range.find('-') {
+                Some(j) => {
+                    let start = &range[..j];
+                    let end = &range[j+1..];
+                    if let Ok(start) = start.parse() {
+                        if let Ok(end) = end.parse() {
+                            if (start > 0 && end > start) {
+                                Some((String::from(seqname), start-1, end))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                },
+                None => None,
+            }
+        },
+        None => None,
+    }
+}
+
+fn print_seq(x: &[u8]) {
+    let s = str::from_utf8(x).expect("Found invalid DNA sequence");
+    println!("{}", s);
+}
+
+fn print_cds(x: &[u8]) {
     let len = x.len();
     assert!(len % 3 == 0);
 
-    if format {
-        let mut s = String::with_capacity(len + (len/3));
-        let mut i = 0;
-        let mut j = 0;  // counter for codon within a line
-        let width = 80;
-        for c in x {
-            s.push(*c as char);
-            i += 1;
-            if i % 3 == 0 {
-                s.push(' ');
-                j += 1;
-                if j * 4 > width {
-                    s.push('\n');
-                    j = 0;
-                }
+    let mut s = String::with_capacity(len + (len/3));
+    let mut i = 0;
+    let mut j = 0;  // counter for codon within a line
+    let width = 80;
+    for c in x {
+        s.push(*c as char);
+        i += 1;
+        if i % 3 == 0 {
+            s.push(' ');
+            j += 1;
+            if j * 4 > width {
+                s.push('\n');
+                j = 0;
             }
         }
-        println!("{}", s);
-    } else {
-        let s = str::from_utf8(x).expect("Found invalid DNA sequence");
-        println!("{}", s);
     }
-
+    println!("{}", s);
 }
 
 fn print_protein(dna: &[u8]) {
