@@ -37,6 +37,31 @@ struct Region {
     end: u64,
 }
 
+const nucleotides: [u8; 4] = [b'A', b'C', b'G', b'T'];
+const n_nucleotides: usize = 4;
+
+const n_substitution_types: usize = n_nucleotides * (n_nucleotides - 1);
+
+const n_mutation_channels: usize = n_substitution_types * n_nucleotides * n_nucleotides;
+
+#[derive(Copy,Clone)]
+enum MutationClass {
+    Synonymous,
+    Missense,
+    StartOrStop,
+    SpliceSite,
+}
+const n_mutation_classes: usize = 4;
+
+type Seq = Vec<u8>;
+
+struct CodingSequence {
+    seqs: Vec<Seq>,
+    padding: usize,
+}
+
+type MutOppArray = [u32; n_mutation_types];
+
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -86,6 +111,7 @@ fn main() {
         Ok(reader) => reader,
     };
 
+
     let genes = genes_from_gff(&mut gff);
 
     println!("{:?}", genes);
@@ -115,16 +141,16 @@ fn main() {
     };
     */
 
-    let mut seqs: Vec<Vec<u8>>;
     for (gid, gene) in genes.iter() {
         println!("{}", gid);
         for (tid, transcript) in gene.transcripts.iter() {
             println!("{}", tid);
-            seqs = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chromosome);
-            for seq in &seqs {
+            let padding = 3;
+            let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chromosome, padding);
+            for seq in &cds.seqs {
                 print_seq(seq);
             }
-            let opp = count_opp(&seqs, 0).unwrap();
+            let opp = count_opp(&cds.seqs, cds.padding).unwrap();
             print_opp_matrix(&opp);
         }
     }
@@ -141,23 +167,26 @@ fn main() {
     */
 }
 
-fn get_transcript_cds_from_fasta<R>(reader: &mut fasta::IndexedReader<R>, transcript: &Transcript, chromosome: &str) -> Vec<Vec<u8>> where R: io::Read + io::Seek {
+fn get_transcript_cds_from_fasta(reader: &mut FastaIndexedReader, transcript: &Transcript, chromosome: &str, padding: usize) -> CodingSequence {
     let mut seqs: Vec<Vec<u8>> = Vec::new();
     for region in &transcript.coding_regions {
         let mut seq: Vec<u8> = Vec::new();
-        match reader.read(chromosome, region.start, region.end, &mut seq) {
+        match reader.read(chromosome, region.start - padding as u64, region.end + padding as u64, &mut seq) {
             Err(why) => panic!("{:?}", why),
             Ok(()) => seqs.push(seq),
         }
     }
-    seqs
+    
+    CodingSequence { seqs: seqs, padding: padding }
 }
+
+type FastaIndexedReader = fasta::IndexedReader<std::fs::File>;
+type GffReader = gff::Reader<std::fs::File>;
 
 /// Construct genes from GFF reader.
 ///
 /// GFF coordinates are 1-based, closed. Convert the coordinates to 0-based, half-open.
-///
-fn genes_from_gff<R: io::Read>(reader: &mut gff::Reader<R>) -> HashMap<String, Gene> {
+fn genes_from_gff(reader: &mut GffReader) -> HashMap<String, Gene> {
     let mut genes: HashMap<String, Gene> = HashMap::new();
 
     for r in reader.records() {
@@ -346,21 +375,6 @@ fn codon_to_aa(codon: &[u8; 3]) -> u8 {
     }
 }
 
-const nucleotides: [u8; 4] = [b'A', b'C', b'G', b'T'];
-const n_nucleotides: usize = 4;
-
-const n_substitution_types: usize = n_nucleotides * (n_nucleotides - 1);
-
-const n_mutation_channels: usize = n_substitution_types * n_nucleotides * n_nucleotides;
-
-#[derive(Copy,Clone)]
-enum MutationClass {
-    Synonymous,
-    Missense,
-    StartOrStop,
-    SpliceSite,
-}
-const n_mutation_classes: usize = 4;
 
 impl MutationClass {
     pub fn iter() -> Iter<'static, MutationClass> {
@@ -514,13 +528,13 @@ fn print_mutation_types() {
     }
 }
 
-fn new_opp_matrix() -> [u32; n_mutation_types] {
+fn new_opp_matrix() -> MutOppArray {
     [0; n_mutation_types]
 }
 
 // print as n_mutation_channels by n_mutation_classes matrix
 // matrix is stored in column-major order
-fn print_opp_matrix(x: &[u32; n_mutation_types]) {
+fn print_opp_matrix(x: &MutOppArray) {
     const I: usize = n_mutation_channels;
 
     // print header
@@ -551,7 +565,7 @@ fn print_opp_matrix(x: &[u32; n_mutation_types]) {
     println!("");
 }
 
-fn sum_opp_in_class(x: &[u32; n_mutation_types], cl: MutationClass) -> u32 {
+fn sum_opp_in_class(x: &MutOppArray, cl: MutationClass) -> u32 {
     const I: usize = n_mutation_channels;
     let j = cl as usize;
     let mut y = 0u32;
@@ -580,14 +594,14 @@ impl CodingSeqs {
 }
 */
 
-fn cds_is_valid(seqs: &[&[u8]], padding: usize) -> bool {
+fn cds_is_valid(seqs: &Vec<Seq>, padding: usize) -> bool {
     let mut valid = true;
 
     let mut total_cds_len = 0;
 
     let nseqs = seqs.len();
     for s in 0 .. nseqs {
-        let seq = seqs[s];
+        let seq = &seqs[s];
         let seq_len = seq.len();
         if seq_len <= 2 * padding {
             // after removing padding, no CDS sequence is left
@@ -606,7 +620,7 @@ fn cds_is_valid(seqs: &[&[u8]], padding: usize) -> bool {
 
     // check for presense of stop codon at the final position using the standard genetic code
     {
-        let seq = seqs[nseqs-1];
+        let seq = &seqs[nseqs-1];
         let end = seq.len() - padding;
         let codon = [seq[end-3], seq[end-2], seq[end-1]];
         if codon_to_aa(&codon) != b'$' {
@@ -620,6 +634,7 @@ fn cds_is_valid(seqs: &[&[u8]], padding: usize) -> bool {
     valid
 }
 
+
 /// Count mutation opportunities.
 ///
 /// Each CDS must be a contiguous sequence in the genome (i.e. exons are not joined together).
@@ -632,7 +647,7 @@ fn cds_is_valid(seqs: &[&[u8]], padding: usize) -> bool {
 /// Splice sites will not be counted unless `padding >= 3`, because splice sites are the first
 /// and last 2 bp of each intron and at least one nucleotide context is needed to count the last
 /// nucleotide of the splice donor and the first nucleotide of the splice acceptor.
-fn count_opp(seqs: &Vec<Vec<u8>>, padding: usize) -> Option<[u32; n_mutation_types]> {
+fn count_opp(seqs: &Vec<Vec<u8>>, padding: usize) -> Option<MutOppArray> {
 
     let nseqs = seqs.len();
 
@@ -765,7 +780,7 @@ fn count_opp(seqs: &Vec<Vec<u8>>, padding: usize) -> Option<[u32; n_mutation_typ
     }
 }
 
-fn count_opp_at_splice_sites(mut x: &mut [u32; n_mutation_types], seqs: &Vec<Vec<u8>>, padding: usize) {
+fn count_opp_at_splice_sites(mut x: &mut MutOppArray, seqs: &Vec<Vec<u8>>, padding: usize) {
     if padding >= 3 {
         let nseqs = seqs.len();
         for s in 0 .. nseqs {
@@ -784,7 +799,7 @@ fn count_opp_at_splice_sites(mut x: &mut [u32; n_mutation_types], seqs: &Vec<Vec
     }
 }
 
-fn count_opp_at_slice_site(x: &mut [u32; n_mutation_types], seq: &[u8], begin: usize) {
+fn count_opp_at_slice_site(x: &mut MutOppArray, seq: &[u8], begin: usize) {
     let splice =  MutationClass::SpliceSite;
     // iterate through the 2 positions of the splice site
     for j in 0 .. 2 {
@@ -804,7 +819,7 @@ fn count_opp_at_slice_site(x: &mut [u32; n_mutation_types], seq: &[u8], begin: u
 /// pos: 0, 1, 2 within the codon
 /// codon: codon sequence
 /// context: sequence centered around the query position
-fn count_opp_at_codon_pos(x: &mut [u32; n_mutation_types], pos: usize, codon: &[u8; 3], aa_ref: u8, context: &[u8; 3]) {
+fn count_opp_at_codon_pos(x: &mut MutOppArray, pos: usize, codon: &[u8; 3], aa_ref: u8, context: &[u8; 3]) {
     let nt_ref = context[1];
     // iterate through possible substitutions
     for &nt_alt in nucleotides.iter() {
