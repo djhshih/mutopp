@@ -37,6 +37,7 @@ struct Transcript {
 
 #[derive(Debug)]
 struct Region {
+    phase: i8,
     start: u64,
     end: u64,
 }
@@ -171,13 +172,45 @@ fn main() {
     */
 }
 
-fn get_transcript_cds_from_fasta(reader: &mut FastaIndexedReader, transcript: &Transcript, chromosome: &str, padding: usize) -> CodingSequence {
-    let mut seqs: Vec<Vec<u8>> = Vec::new();
-    for region in &transcript.coding_regions {
-        let mut seq: Vec<u8> = Vec::new();
-        match reader.read(chromosome, region.start - padding as u64, region.end + padding as u64, &mut seq) {
-            Err(why) => panic!("{:?}", why),
-            Ok(()) => seqs.push(seq),
+fn complement(x: u8) -> u8 {
+    match x {
+        b'A' => b'T',
+        b'C' => b'G',
+        b'G' => b'C',
+        b'T' => b'A',
+        _ => b'X',
+    }
+}
+
+/// Reverse complement sequnce in place.
+fn reverse_complement(seq: &mut Seq) {
+    let n = seq.len();
+    // iteratate from 0 to floor(n / 2) - 1
+    for i in 0 .. (n / 2) {
+        let j = n - 1 - i;
+        // complement nucleotide and reverse order in-place
+        let x = complement(seq[i]);
+        seq[i] = complement(seq[j]);
+        seq[j] = x;
+    }
+    if n % 2 == 1 {
+        // if sequence length is odd, then the lone middle element has not been touched
+        let j = n / 2;
+        seq[j] = complement(seq[j]);
+    }
+}
+
+/// Assume that CDS are in order for features on the plus and the minus strand.
+/// For features on the minus strand specifically, the positions of the CDS is in descending order
+fn get_transcript_cds_from_fasta(reader: &mut FastaIndexedReader, transcript: &Transcript, chromosome: &str, strand: Strand, padding: usize) -> CodingSequence {
+    let n = transcript.coding_regions.len();
+    let mut seqs: Vec<Seq> = vec![Vec::new(); n];
+    for (i, region) in transcript.coding_regions.iter().enumerate() {
+        if let Err(why) = reader.read(chromosome, region.start - padding as u64, region.end + padding as u64, &mut seqs[i]) {
+            panic!("{:?}", why);
+        }
+        if strand == Strand::Reverse {
+            reverse_complement(&mut seqs[i]);
         }
     }
     
@@ -194,6 +227,15 @@ fn attribute_filter(attrs: &MultiMap<String, String>, key: &str, target: &str) -
 type FastaIndexedReader = fasta::IndexedReader<std::fs::File>;
 type GffReader = gff::Reader<std::fs::File>;
 
+fn parse_phase(phase: &str) -> i8 {
+    match phase {
+        "0" => 0,
+        "1" => 1,
+        "2" => 2,
+        _ => -1,
+    }
+}
+
 /// Construct genes from GFF reader.
 ///
 /// GFF coordinates are 1-based, closed. Convert the coordinates to 0-based, half-open.
@@ -205,7 +247,6 @@ fn genes_from_gff(reader: &mut GffReader) -> HashMap<String, Gene> {
         let attrs = &record.attributes();
         match record.feature_type() {
             "gene" => {
-                // assume that frame is always 0
                 if attribute_filter(attrs, "gene_type", "protein_coding") {
                     genes.insert(
                         attrs.get("gene_id").unwrap().clone(),
@@ -237,10 +278,11 @@ fn genes_from_gff(reader: &mut GffReader) -> HashMap<String, Gene> {
             },
             "CDS" => {
                 // assume that gene and transcript, if valid, have already been inserted
+                // assume that frame of the first CDS is always 0
                 if let Some(gene) = genes.get_mut(attrs.get("gene_id").unwrap()) {
                     if let Some(transcript) = gene.transcripts.get_mut(attrs.get("transcript_id").unwrap()) {
                         transcript.coding_regions.push(
-                            Region { start: *record.start() - 1, end: *record.end() }
+                            Region { phase: parse_phase(record.frame()), start: *record.start() - 1, end: *record.end() }
                         );
                     }
                 }
@@ -306,8 +348,14 @@ fn write_opp(genes: HashMap<String, Gene>, mut ifasta: &mut FastaIndexedReader, 
     for (gid, gene) in genes.iter() {
         for (tid, transcript) in gene.transcripts.iter() {
             let padding = 3;
-            let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chromosome, padding);
-            print!("{} {} {} ... ", gid, gene.name, tid);
+            let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chromosome, gene.strand, padding);
+            let pseq = if cds.seqs.len() > 0 && cds.seqs[0].len() > padding + 6 {
+                str::from_utf8(&cds.seqs[0][0 .. padding]).unwrap().to_lowercase() +
+                    str::from_utf8(&cds.seqs[0][padding .. padding + 6]).unwrap()
+            } else {
+                String::new()
+            };
+            print!("{} {} {} {}... ", gid, gene.name, tid, pseq);
             // sequence may not have 9 nucleotides!
             //println!("{} {} {} {}...", gid, gene.name, tid, str::from_utf8(&cds.seqs[0][0..9]).unwrap());
             if let Some(opp) = cds.count_opp() {
@@ -1423,6 +1471,25 @@ mod test {
         let pans: &[u32] = &ans;
 
         assert_eq!(pout, pans);
+    }
+
+    #[test]
+    fn test_reverse_complement() {
+        {
+            let mut x = b"ATAGAC".to_vec();
+            reverse_complement(&mut x);
+            assert_eq!(b"GTCTAT".to_vec(), x);
+        }
+        {
+            let mut x = b"GTATCGAAC".to_vec();
+            reverse_complement(&mut x);
+            assert_eq!(b"GTTCGATAC".to_vec(), x);
+        }
+        {
+            let mut x = b"TTAACTTXTTATGC".to_vec();
+            reverse_complement(&mut x);
+            assert_eq!(b"GCATAAXAAGTTAA".to_vec(), x);
+        }
     }
 
 }
