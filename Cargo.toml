@@ -6,3 +6,4 @@ authors = ["David J. H. Shih <djh.shih@gmail.com>"]
 [dependencies]
 bio = "0.14.1"
 rusqlite = "0.12.0"
+multimap = "0.4"

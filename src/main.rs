@@ -1,4 +1,5 @@
 extern crate bio;
+extern crate multimap;
 
 use std::io;
 use std::str;
@@ -9,6 +10,8 @@ use std::env;
 use std::process;
 use std::collections::HashMap;
 use std::fs::File;
+
+use multimap::MultiMap;
 
 use bio::io::fasta;
 use bio::io::gff;
@@ -114,6 +117,7 @@ fn main() {
     };
 
     let genes = genes_from_gff(&mut gff);
+    println!("number of valid protein-coding genes: {}", genes.len());
     //println!("{:?}", genes);
 
     let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
@@ -180,6 +184,13 @@ fn get_transcript_cds_from_fasta(reader: &mut FastaIndexedReader, transcript: &T
     CodingSequence { seqs: seqs, padding: padding }
 }
 
+fn attribute_filter(attrs: &MultiMap<String, String>, key: &str, target: &str) -> bool {
+    match attrs.get(key) {
+        Some(value) => (value == target),
+        None => false,
+    }
+}
+
 type FastaIndexedReader = fasta::IndexedReader<std::fs::File>;
 type GffReader = gff::Reader<std::fs::File>;
 
@@ -195,7 +206,7 @@ fn genes_from_gff(reader: &mut GffReader) -> HashMap<String, Gene> {
         match record.feature_type() {
             "gene" => {
                 // assume that frame is always 0
-                if attrs.get("level").unwrap() == "1" && attrs.get("gene_type").unwrap() == "protein_coding" {
+                if attribute_filter(attrs, "level", "1") && attribute_filter(attrs, "gene_type", "protein_coding") {
                     genes.insert(
                         attrs.get("gene_id").unwrap().clone(),
                         Gene {
@@ -210,32 +221,38 @@ fn genes_from_gff(reader: &mut GffReader) -> HashMap<String, Gene> {
                 }
             },
             "transcript" => {
-                if attrs.get("transcript_support_level").unwrap() == "1" && attrs.get("transcript_type").unwrap() == "protein_coding" {
-                    // assume that gene has already been inserted
-                    let gene = genes.get_mut(attrs.get("gene_id").unwrap()).expect("gene is inserted before descendent transcript");
-                    gene.transcripts.insert(
-                        attrs.get("transcript_id").unwrap().clone(),
-                        Transcript {
-                            start: *record.start() - 1,
-                            end: *record.end(),
-                            coding_regions: Vec::new(),
-                        }
-                    );
+                if attribute_filter(attrs, "transcript_support_level", "1") && attribute_filter(attrs, "transcript_type", "protein_coding") {
+                    // assume that gene, if valid, has already been inserted
+                    if let Some(gene) = genes.get_mut(attrs.get("gene_id").unwrap()) {
+                        gene.transcripts.insert(
+                            attrs.get("transcript_id").unwrap().clone(),
+                            Transcript {
+                                start: *record.start() - 1,
+                                end: *record.end(),
+                                coding_regions: Vec::new(),
+                            }
+                        );
+                    }
                 }
             },
             "CDS" => {
-                // assume that gene and transcript have already been inserted
-                let gene = genes.get_mut(attrs.get("gene_id").unwrap()).expect("gene is inserted before descendent CDS");
-                let transcript = gene.transcripts.get_mut(attrs.get("transcript_id").unwrap()).expect("transcript is inserted before descendent CDS");
-                transcript.coding_regions.push(
-                    Region { start: *record.start() - 1, end: *record.end() }
-                );
+                // assume that gene and transcript, if valid, have already been inserted
+                if let Some(gene) = genes.get_mut(attrs.get("gene_id").unwrap()) {
+                    if let Some(transcript) = gene.transcripts.get_mut(attrs.get("transcript_id").unwrap()) {
+                        transcript.coding_regions.push(
+                            Region { start: *record.start() - 1, end: *record.end() }
+                        );
+                    }
+                }
             },
             _ => {} // ignore all other fields
         }
     }
 
-    genes
+    // filter genes without valid transcripts
+    genes.into_iter()
+        .filter(|&(_, ref v)| !v.transcripts.is_empty())
+        .collect()
 }
 
 /// Parse genomic coordinate.
