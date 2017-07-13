@@ -206,7 +206,7 @@ fn genes_from_gff(reader: &mut GffReader) -> HashMap<String, Gene> {
         match record.feature_type() {
             "gene" => {
                 // assume that frame is always 0
-                if attribute_filter(attrs, "level", "1") && attribute_filter(attrs, "gene_type", "protein_coding") {
+                if attribute_filter(attrs, "gene_type", "protein_coding") {
                     genes.insert(
                         attrs.get("gene_id").unwrap().clone(),
                         Gene {
@@ -296,7 +296,7 @@ fn write_opp(genes: HashMap<String, Gene>, mut ifasta: &mut FastaIndexedReader, 
 
     let sep = "\t";
 
-    let mut header = vec![String::from("gene"), String::from("transcript")];
+    let mut header = vec![String::from("gene"), String::from("symbol"), String::from("transcript")];
     header.extend(mutation_types());
 
     if let Err(why) = writeln!(out, "{}", header.join(sep)) {
@@ -311,7 +311,7 @@ fn write_opp(genes: HashMap<String, Gene>, mut ifasta: &mut FastaIndexedReader, 
             // sequence may not have 9 nucleotides!
             //println!("{} {} {} {}...", gid, gene.name, tid, str::from_utf8(&cds.seqs[0][0..9]).unwrap());
             if let Some(opp) = cds.count_opp() {
-                let mut line = vec![gid.clone(), tid.clone()].join(sep);
+                let mut line = vec![gid.clone(), gene.name.clone(), tid.clone()].join(sep);
                 for o in opp.iter() {
                     line.push_str(sep);
                     line.push_str(&o.to_string());
