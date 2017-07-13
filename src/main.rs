@@ -191,37 +191,42 @@ fn genes_from_gff(reader: &mut GffReader) -> HashMap<String, Gene> {
 
     for r in reader.records() {
         let record = r.expect("Error reading GFF3 record");
+        let attrs = &record.attributes();
         match record.feature_type() {
             "gene" => {
                 // assume that frame is always 0
-                genes.insert(
-                    record.attributes().get("gene_id").unwrap().clone(),
-                    Gene {
-                        name: record.attributes().get("gene_name").unwrap().clone(),
-                        chromosome: record.seqname().to_owned(),
-                        start: *record.start() - 1,
-                        end: *record.end(),
-                        strand: record.strand().unwrap(),
-                        transcripts: HashMap::new(),
-                    }
-                );
+                if attrs.get("level").unwrap() == "1" && attrs.get("gene_type").unwrap() == "protein_coding" {
+                    genes.insert(
+                        attrs.get("gene_id").unwrap().clone(),
+                        Gene {
+                            name: attrs.get("gene_name").unwrap().clone(),
+                            chromosome: record.seqname().to_owned(),
+                            start: *record.start() - 1,
+                            end: *record.end(),
+                            strand: record.strand().unwrap(),
+                            transcripts: HashMap::new(),
+                        }
+                    );
+                }
             },
             "transcript" => {
-                // assume that gene has already been inserted
-                let gene = genes.get_mut(record.attributes().get("gene_id").unwrap()).expect("gene is inserted before descendent transcript");
-                gene.transcripts.insert(
-                    record.attributes().get("transcript_id").unwrap().clone(),
-                    Transcript {
-                        start: *record.start() - 1,
-                        end: *record.end(),
-                        coding_regions: Vec::new(),
-                    }
-                );
+                if attrs.get("transcript_support_level").unwrap() == "1" && attrs.get("transcript_type").unwrap() == "protein_coding" {
+                    // assume that gene has already been inserted
+                    let gene = genes.get_mut(attrs.get("gene_id").unwrap()).expect("gene is inserted before descendent transcript");
+                    gene.transcripts.insert(
+                        attrs.get("transcript_id").unwrap().clone(),
+                        Transcript {
+                            start: *record.start() - 1,
+                            end: *record.end(),
+                            coding_regions: Vec::new(),
+                        }
+                    );
+                }
             },
             "CDS" => {
                 // assume that gene and transcript have already been inserted
-                let gene = genes.get_mut(record.attributes().get("gene_id").unwrap()).expect("gene is inserted before descendent CDS");
-                let transcript = gene.transcripts.get_mut(record.attributes().get("transcript_id").unwrap()).expect("transcript is inserted before descendent CDS");
+                let gene = genes.get_mut(attrs.get("gene_id").unwrap()).expect("gene is inserted before descendent CDS");
+                let transcript = gene.transcripts.get_mut(attrs.get("transcript_id").unwrap()).expect("transcript is inserted before descendent CDS");
                 transcript.coding_regions.push(
                     Region { start: *record.start() - 1, end: *record.end() }
                 );
@@ -285,14 +290,20 @@ fn write_opp(genes: HashMap<String, Gene>, mut ifasta: &mut FastaIndexedReader, 
         for (tid, transcript) in gene.transcripts.iter() {
             let padding = 3;
             let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chromosome, padding);
-            println!("{} {} {} {}...", gid, gene.name, tid, str::from_utf8(&cds.seqs[0][0..9]).unwrap());
-            let opp = cds.count_opp().unwrap();
-            let mut line = vec![gid.clone(), tid.clone()].join(sep);
-            for o in opp.iter() {
-                line.push_str(sep);
-                line.push_str(&o.to_string());
+            print!("{} {} {} ... ", gid, gene.name, tid);
+            // sequence may not have 9 nucleotides!
+            //println!("{} {} {} {}...", gid, gene.name, tid, str::from_utf8(&cds.seqs[0][0..9]).unwrap());
+            if let Some(opp) = cds.count_opp() {
+                let mut line = vec![gid.clone(), tid.clone()].join(sep);
+                for o in opp.iter() {
+                    line.push_str(sep);
+                    line.push_str(&o.to_string());
+                }
+                writeln!(out, "{}", line);
+                println!("succeeded");
+            } else {
+                println!("failed");
             }
-            writeln!(out, "{}", line);
         }
     }
 
@@ -706,10 +717,14 @@ impl CodingSequence {
     /// and last 2 bp of each intron and at least one nucleotide context is needed to count the last
     /// nucleotide of the splice donor and the first nucleotide of the splice acceptor.
     fn count_opp(&self) -> Option<MutOppArray> {
+        if self.seqs.is_empty() {
+            return None;
+        }
 
         let seqs = &self.seqs;
         let padding = self.padding;
         let nseqs = seqs.len();
+
 
         let mut x = new_opp_matrix();
         let mut offset = 0;
@@ -728,7 +743,7 @@ impl CodingSequence {
             let cds_begin = offset + padding;
             let mut i = cds_begin;
             // step through the first nucleotide of each codon
-            while i < cds_end - 2 {
+            while i + 2 < cds_end {
                 let codon_ref: [u8; 3] = [seq[i], seq[i+1], seq[i+2]];
                 // translate codon
                 let aa_ref = if s == 0 && i == cds_begin {
@@ -766,7 +781,7 @@ impl CodingSequence {
                     let cds2_len = seq2.len() - (2 * padding);
                     if cds2_len < needed {
                         // there are not enough nucleotides in the next CDS to complete the codon... 
-                        // this is an error with the sequences
+                        // there is probably a problem with the sequence...
                         error = true;
                         break;
                     } else {
