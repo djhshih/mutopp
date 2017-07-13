@@ -8,6 +8,7 @@ use std::slice::Iter;
 use std::env;
 use std::process;
 use std::collections::HashMap;
+use std::fs::File;
 
 use bio::io::fasta;
 use bio::io::gff;
@@ -67,13 +68,13 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 4 {
-        println!("usage: mutopp <fasta> <coord> <gff3>");
+        println!("usage: mutopp <fasta> <gff3> <out>");
         process::exit(1);
     }
 
     let fasta_fn = &args[1];
-    let coord = &args[2];
-    let gff_fn = &args[3];
+    let gff_fn = &args[2];
+    let out_fn = &args[3];
 
     // read the entire fasta
     /*
@@ -112,17 +113,17 @@ fn main() {
         Ok(reader) => reader,
     };
 
-
     let genes = genes_from_gff(&mut gff);
+    //println!("{:?}", genes);
 
-    println!("{:?}", genes);
-
-    // read only part of the fasta
     let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
         Err(why) => panic!("{:?}", why),
         Ok(reader) => reader,
     };
 
+    /*
+    let coord = &args[2];
+    // read only part of the fasta
     if let Some((seqname, start, end)) = parse_coordinate(coord) {
         println!("{} {} {}", seqname, start, end);
         let mut seq: Vec<u8> = Vec::new();
@@ -133,6 +134,17 @@ fn main() {
     } else {
         panic!("Invalid coordinate: {}", coord);
     }
+    */
+
+    // Open a file in write-only mode, returns `io::Result<File>`
+    let mut out_file = match File::create(&out_fn) {
+        Err(why) => panic!("Could not create {}: {:?}",
+                           out_fn,
+                           why),
+        Ok(file) => file,
+    };
+
+    write_opp(genes, &mut ifasta, &mut out_file);
 
     /*
     let t = Transcript {
@@ -142,19 +154,6 @@ fn main() {
     };
     */
 
-    for (gid, gene) in genes.iter() {
-        println!("{}", gid);
-        for (tid, transcript) in gene.transcripts.iter() {
-            println!("{}", tid);
-            let padding = 3;
-            let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chromosome, padding);
-            for seq in &cds.seqs {
-                print_seq(seq);
-            }
-            let opp = cds.count_opp().unwrap();
-            print_opp_matrix(&opp);
-        }
-    }
 
     /*
     print_mutation_types();
@@ -267,6 +266,36 @@ fn parse_coordinate(x: &str) -> Option<(String, u64, u64)> {
         },
         None => None,
     }
+}
+
+fn write_opp(genes: HashMap<String, Gene>, mut ifasta: &mut FastaIndexedReader, out: &mut File) {
+    use std::io::Write;
+    use std::error::Error;
+
+    let sep = "\t";
+
+    let mut header = vec![String::from("gene"), String::from("transcript")];
+    header.extend(mutation_types());
+
+    if let Err(why) = writeln!(out, "{}", header.join(sep)) {
+        panic!("couldn't write to output file: {}", why.description())
+    }
+
+    for (gid, gene) in genes.iter() {
+        for (tid, transcript) in gene.transcripts.iter() {
+            let padding = 3;
+            let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chromosome, padding);
+            println!("{} {} {} {}...", gid, gene.name, tid, str::from_utf8(&cds.seqs[0][0..9]).unwrap());
+            let opp = cds.count_opp().unwrap();
+            let mut line = vec![gid.clone(), tid.clone()].join(sep);
+            for o in opp.iter() {
+                line.push_str(sep);
+                line.push_str(&o.to_string());
+            }
+            writeln!(out, "{}", line);
+        }
+    }
+
 }
 
 fn print_seq(x: &[u8]) {
@@ -463,6 +492,7 @@ fn mutation_type_index(cl: MutationClass, nt_ref: u8, nt_alt: u8, nt_5p: u8, nt_
     ((i * J + j) * K + k) * L + l
 }
 
+
 fn mutation_channels() -> Vec<String> {
     let cl = MutationClass::Synonymous;
     let mut names = vec![String::new(); n_mutation_channels as usize];
@@ -527,6 +557,32 @@ fn print_mutation_types() {
             }
         }
     }
+}
+
+fn mutation_types() -> Vec<String> {
+    let mut names = vec![String::new(); n_mutation_types as usize];
+    for &cl in MutationClass::iter() {
+        for &nt_ref in nucleotides.iter() {
+            for &nt_alt in nucleotides.iter() {
+                if nt_ref != nt_alt {
+                    for &nt_5p in nucleotides.iter() {
+                        for &nt_3p in nucleotides.iter() {
+                            let idx = mutation_type_index(cl, nt_ref, nt_alt, nt_5p, nt_3p);
+                            names[idx] = format!(
+                                "{class}_{c5}{ref}{c3}_{c5}{alt}{c3}",
+                                class = cl,
+                                ref = (nt_ref as char).to_ascii_lowercase(),
+                                alt = (nt_alt as char).to_ascii_lowercase(),
+                                c5 = (nt_5p as char).to_ascii_lowercase(),
+                                c3 = (nt_3p as char).to_ascii_lowercase(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    names
 }
 
 fn new_opp_matrix() -> MutOppArray {
@@ -822,6 +878,7 @@ fn count_opp_at_slice_site(x: &mut MutOppArray, seq: &[u8], begin: usize) {
     }
 }
 
+/// Count mutation opportunities at codon position.
 /// x: opportunity matrix
 /// pos: 0, 1, 2 within the codon
 /// codon: codon sequence
@@ -853,6 +910,7 @@ fn count_opp_at_codon_pos(x: &mut MutOppArray, pos: usize, codon: &[u8; 3], aa_r
     }
 }
 
+/// Mutate codon.
 fn mutate_codon(codon: &[u8; 3], pos: usize, nt_alt: u8) -> [u8; 3] {
     assert!(pos <= 2);
 
