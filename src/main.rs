@@ -2,9 +2,10 @@ extern crate bio;
 extern crate multimap;
 extern crate mutopp;
 
-use std::str;
+use std::io;
 use std::env;
 use std::process;
+use std::str;
 use std::fs::File;
 
 use multimap::MultiMap;
@@ -68,9 +69,9 @@ fn main() {
         Ok(reader) => reader,
     };
 
-    let genes = genes_from_gff(&mut gff);
+    let genes = Genes::from_gff(&mut gff);
     println!("number of valid protein-coding genes: {}", genes.len());
-    //println!("{:?}", genes);
+    println!("{:?}", genes);
 
     let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
         Err(why) => panic!("{:?}", why),
@@ -100,7 +101,9 @@ fn main() {
         Ok(file) => file,
     };
 
-    write_opp(genes, &mut ifasta, &mut out_file);
+    if let Err(err) = genes.write_opps(&mut ifasta, &mut out_file) {
+        panic!("Could not write mutation opportunities to file: {}", err);
+    }
 
     /*
     let t = Transcript {
@@ -156,66 +159,126 @@ fn parse_phase(phase: &str) -> i8 {
     }
 }
 
-/// Construct genes from GFF reader.
-///
-/// GFF coordinates are 1-based, closed. Convert the coordinates to 0-based, half-open.
-fn genes_from_gff(reader: &mut GffReader) -> HashMap<String, Gene> {
-    let mut genes: HashMap<String, Gene> = HashMap::new();
+#[derive(Debug)]
+struct Genes(HashMap<String, Gene>);
 
-    for r in reader.records() {
-        let record = r.expect("Error reading GFF3 record");
-        let attrs = &record.attributes();
-        match record.feature_type() {
-            "gene" => {
-                if attribute_filter(attrs, "gene_type", "protein_coding") {
-                    genes.insert(
-                        attrs.get("gene_id").unwrap().clone(),
-                        Gene {
-                            name: attrs.get("gene_name").unwrap().clone(),
-                            chromosome: record.seqname().to_owned(),
-                            start: *record.start() - 1,
-                            end: *record.end(),
-                            strand: record.strand().unwrap(),
-                            transcripts: HashMap::new(),
-                        }
-                    );
-                }
-            },
-            "transcript" => {
-                if attribute_filter(attrs, "transcript_type", "protein_coding") {
-                    // assume that gene, if valid, has already been inserted
-                    if let Some(gene) = genes.get_mut(attrs.get("gene_id").unwrap()) {
-                        gene.transcripts.insert(
-                            attrs.get("transcript_id").unwrap().clone(),
-                            Transcript {
+impl Genes {
+    fn new() -> Genes {
+        Genes(HashMap::new())
+    }
+    
+    /// Construct genes from GFF reader.
+    ///
+    /// GFF coordinates are 1-based, closed. Convert the coordinates to 0-based, half-open.
+    fn from_gff(reader: &mut GffReader) -> Genes {
+        let mut genes = Genes::new();
+
+        for r in reader.records() {
+            let record = r.expect("Error reading GFF3 record");
+            let attrs = &record.attributes();
+            match record.feature_type() {
+                "gene" => {
+                    if attribute_filter(attrs, "gene_type", "protein_coding") {
+                        genes.0.insert(
+                            attrs.get("gene_id").unwrap().clone(),
+                            Gene {
+                                name: attrs.get("gene_name").unwrap().clone(),
+                                chromosome: record.seqname().to_owned(),
                                 start: *record.start() - 1,
                                 end: *record.end(),
-                                coding_regions: Vec::new(),
+                                strand: record.strand().unwrap(),
+                                transcripts: HashMap::new(),
                             }
                         );
                     }
-                }
-            },
-            "CDS" => {
-                // assume that gene and transcript, if valid, have already been inserted
-                // assume that frame of the first CDS is always 0
-                if let Some(gene) = genes.get_mut(attrs.get("gene_id").unwrap()) {
-                    if let Some(transcript) = gene.transcripts.get_mut(attrs.get("transcript_id").unwrap()) {
-                        transcript.coding_regions.push(
-                            Region { phase: parse_phase(record.frame()), start: *record.start() - 1, end: *record.end() }
-                        );
+                },
+                "transcript" => {
+                    if attribute_filter(attrs, "transcript_type", "protein_coding") {
+                        // assume that gene, if valid, has already been inserted
+                        if let Some(gene) = genes.0.get_mut(attrs.get("gene_id").unwrap()) {
+                            gene.transcripts.insert(
+                                attrs.get("transcript_id").unwrap().clone(),
+                                Transcript {
+                                    start: *record.start() - 1,
+                                    end: *record.end(),
+                                    coding_regions: Vec::new(),
+                                }
+                            );
+                        }
                     }
-                }
-            },
-            _ => {} // ignore all other fields
+                },
+                "CDS" => {
+                    // assume that gene and transcript, if valid, have already been inserted
+                    // assume that frame of the first CDS is always 0
+                    if let Some(gene) = genes.0.get_mut(attrs.get("gene_id").unwrap()) {
+                        if let Some(transcript) = gene.transcripts.get_mut(attrs.get("transcript_id").unwrap()) {
+                            transcript.coding_regions.push(
+                                Region { phase: parse_phase(record.frame()), start: *record.start() - 1, end: *record.end() }
+                            );
+                        }
+                    }
+                },
+                _ => {} // ignore all other fields
+            }
         }
+
+        // filter genes without valid transcripts
+        Genes(
+            genes.0.into_iter()
+                .filter(|&(_, ref v)| !v.transcripts.is_empty())
+                .collect()
+        )
     }
 
-    // filter genes without valid transcripts
-    genes.into_iter()
-        .filter(|&(_, ref v)| !v.transcripts.is_empty())
-        .collect()
+    #[inline]
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    
+    /// Write the mutation opporunity array of each gene to file.
+    /// mut is needed for ifasta due to indexing
+    fn write_opps(&self, mut ifasta: &mut FastaIndexedReader, out: &mut File) -> io::Result<()> {
+        use std::io::Write;
+
+        let sep = "\t";
+
+        let mut header = vec![String::from("gene"), String::from("symbol"), String::from("transcript")];
+        header.extend(MutOpps::types());
+
+        try!(writeln!(out, "{}", header.join(sep)));
+
+        for (gid, gene) in self.0.iter() {
+            for (tid, transcript) in gene.transcripts.iter() {
+                let padding = 3;
+                let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chromosome, gene.strand, padding);
+                let pseq = if cds.seqs.len() > 0 && cds.seqs[0].len() > padding + 6 {
+                    str::from_utf8(&cds.seqs[0][0 .. padding]).unwrap().to_lowercase() +
+                        str::from_utf8(&cds.seqs[0][padding .. padding + 6]).unwrap()
+                } else {
+                    String::new()
+                };
+                print!("{} {} {} {}... ", gid, gene.name, tid, pseq);
+                // sequence may not have 9 nucleotides!
+                //println!("{} {} {} {}...", gid, gene.name, tid, str::from_utf8(&cds.seqs[0][0..9]).unwrap());
+                if let Some(opp) = cds.count_opp() {
+                    let mut line = vec![gid.clone(), gene.name.clone(), tid.clone()].join(sep);
+                    for o in opp.iter() {
+                        line.push_str(sep);
+                        line.push_str(&o.to_string());
+                    }
+                    try!(writeln!(out, "{}", line));
+                    println!("succeeded");
+                } else {
+                    println!("failed");
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
 }
+
 
 /// Parse genomic coordinate.
 ///
@@ -250,46 +313,4 @@ fn parse_coordinate(x: &str) -> Option<(String, u64, u64)> {
         },
         None => None,
     }
-}
-
-fn write_opp(genes: HashMap<String, Gene>, mut ifasta: &mut FastaIndexedReader, out: &mut File) {
-    use std::io::Write;
-    use std::error::Error;
-
-    let sep = "\t";
-
-    let mut header = vec![String::from("gene"), String::from("symbol"), String::from("transcript")];
-    header.extend(MutOpps::types());
-
-    if let Err(why) = writeln!(out, "{}", header.join(sep)) {
-        panic!("couldn't write to output file: {}", why.description())
-    }
-
-    for (gid, gene) in genes.iter() {
-        for (tid, transcript) in gene.transcripts.iter() {
-            let padding = 3;
-            let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chromosome, gene.strand, padding);
-            let pseq = if cds.seqs.len() > 0 && cds.seqs[0].len() > padding + 6 {
-                str::from_utf8(&cds.seqs[0][0 .. padding]).unwrap().to_lowercase() +
-                    str::from_utf8(&cds.seqs[0][padding .. padding + 6]).unwrap()
-            } else {
-                String::new()
-            };
-            print!("{} {} {} {}... ", gid, gene.name, tid, pseq);
-            // sequence may not have 9 nucleotides!
-            //println!("{} {} {} {}...", gid, gene.name, tid, str::from_utf8(&cds.seqs[0][0..9]).unwrap());
-            if let Some(opp) = cds.count_opp() {
-                let mut line = vec![gid.clone(), gene.name.clone(), tid.clone()].join(sep);
-                for o in opp.iter() {
-                    line.push_str(sep);
-                    line.push_str(&o.to_string());
-                }
-                writeln!(out, "{}", line);
-                println!("succeeded");
-            } else {
-                println!("failed");
-            }
-        }
-    }
-
 }
