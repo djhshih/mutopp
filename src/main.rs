@@ -182,7 +182,7 @@ fn genes_from_gff(reader: &mut GffReader) -> HashMap<String, Gene> {
                 }
             },
             "transcript" => {
-                if attribute_filter(attrs, "transcript_support_level", "1") && attribute_filter(attrs, "transcript_type", "protein_coding") {
+                if attribute_filter(attrs, "transcript_type", "protein_coding") {
                     // assume that gene, if valid, has already been inserted
                     if let Some(gene) = genes.get_mut(attrs.get("gene_id").unwrap()) {
                         gene.transcripts.insert(
