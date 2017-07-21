@@ -1,129 +1,134 @@
 extern crate bio;
 extern crate multimap;
+#[macro_use] extern crate clap;
 extern crate mutopp;
 
 use std::io;
-use std::env;
-use std::process;
 use std::str;
-use std::fs::File;
-
-use multimap::MultiMap;
+use std::fs;
 
 use bio::io::fasta;
 use bio::io::gff;
 
+use multimap::MultiMap;
+
+use clap::{Arg, App, SubCommand};
+
 use mutopp::gene::{Gene,Transcript,Region,HashMap,Strand};
 use mutopp::seq::{self,CodingSequence};
 use mutopp::mutation::MutOpps;
+use mutopp::utils;
 
-type FastaIndexedReader = fasta::IndexedReader<std::fs::File>;
-type GffReader = gff::Reader<std::fs::File>;
+type FastaIndexedReader = fasta::IndexedReader<fs::File>;
+type GffReader = gff::Reader<fs::File>;
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let matches = App::new("mutopp")
+        .version(crate_version!())
+        .author("David J. H. Shih <djh.shih@gmail.com>")
+        .about("Mutation opportunity")
+        .subcommand(SubCommand::with_name("count")
+            .about("count mutation opportunities")
+            .arg(Arg::with_name("fasta")
+                .help("input indexed .fasta file (index .fasta.fai file must exist)")
+                .required(true))
+            .arg(Arg::with_name("gff")
+                .help("input gene annotation .gff3 file")
+                .required(true))
+            .arg(Arg::with_name("output")
+                .help("output file")
+                .required(true))
+        )
+        .subcommand(SubCommand::with_name("extract")
+            .about("extract sequence from .fasta file")
+            .arg(Arg::with_name("fasta")
+                .help("input indexed .fasta file (index .fasta.fai file must exist)")
+                .required(true))
+            .arg(Arg::with_name("coord")
+                .short("c")
+                .help("target coordinate to extract")
+                .takes_value(true))
+            .arg(Arg::with_name("gff")
+                .short("g")
+                .help("genes to extract")
+                .conflicts_with("coord")
+                .takes_value(true))
+        )
+        .get_matches();
 
-    if args.len() < 4 {
-        println!("usage: mutopp <fasta> <gff3> <out>");
-        process::exit(1);
+    match matches.subcommand_name() {
+        Some("count") => {
+            let m = matches.subcommand_matches("count").unwrap();
+            let ref fasta_fn = m.value_of("fasta").unwrap();
+            let ref gff_fn = m.value_of("gff").unwrap();
+            let ref out_fn = m.value_of("output").unwrap();
+            
+            let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
+                Err(why) => panic!("{:?}", why),
+                Ok(reader) => reader,
+            };
+
+            let mut gff = match gff::Reader::from_file(gff_fn, gff::GffType::GFF3) {
+                Err(why) => panic!("{:?}", why),
+                Ok(reader) => reader,
+            };
+
+            let genes = Genes::from_gff(&mut gff);
+            println!("number of valid protein-coding genes: {}", genes.len());
+            println!("{:?}", genes);
+            
+            // Open a file in write-only mode, returns `io::Result<fs::File>`
+            let mut out_file = match fs::File::create(&out_fn) {
+                Err(why) => panic!("Could not create {}: {:?}",
+                                out_fn,
+                                why),
+                Ok(file) => file,
+            };
+
+            if let Err(why) = genes.write_opps(&mut ifasta, &mut out_file) {
+                panic!("Could not write mutation opportunities to file: {}", why);
+            }
+        },
+        Some("extract") => {
+            let m = matches.subcommand_matches("extract").unwrap();
+            let ref fasta_fn = m.value_of("fasta").unwrap();
+            
+            let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
+                Err(why) => panic!("{:?}", why),
+                Ok(reader) => reader,
+            };
+            
+            if let Some(ref gff_fn) = m.value_of("gff") {
+                let mut gff = match gff::Reader::from_file(gff_fn, gff::GffType::GFF3) {
+                    Err(why) => panic!("{:?}", why),
+                    Ok(reader) => reader,
+                };
+
+                let genes = Genes::from_gff(&mut gff);
+                println!("number of valid protein-coding genes: {}", genes.len());
+                println!("{:?}", genes);
+                
+                // TODO extract and output sequence for genes
+            }
+
+            if let Some(coord) = m.value_of("coord") {
+                // read only part of the fasta
+                if let Some((seqname, start, end)) = utils::parse_coordinate(&coord) {
+                    //println!("{} {} {}", seqname, start, end);
+                    let mut seq: Vec<u8> = Vec::new();
+                    match ifasta.read(&seqname, start, end, &mut seq) {
+                        Err(why) => panic!("{:?}", why),
+                        Ok(()) => seq::print_seq(&seq),
+                    }
+                } else {
+                    panic!("Invalid coordinate: {}", coord);
+                }
+            }
+            
+        },
+        None => println!("Type `mutopp help` for help."),
+        _ => panic!("Invalid subcommand"),
     }
-
-    let fasta_fn = &args[1];
-    let gff_fn = &args[2];
-    let out_fn = &args[3];
-
-    // read the entire fasta
-    /*
-    let fasta = match fasta::Reader::from_file(fasta_fn) {
-        Err(why) => panic!("{:?}", why),
-        Ok(reader) => reader,
-    };
-
-    for (_, r) in fasta.records().enumerate() {
-        let record = r.expect("Error reading FASTA record");
-        let desc = match record.desc() {
-            Some(x) => x,
-            None  => "",
-        };
-
-        println!("{}", record.id());
-        println!("{}", desc);
-        print_cds(record.seq());
-
-        /*
-        (record.seq());
-
-        let cds = CodingSequence { seqs: vec![record.seq()], padding: 0 };
-        let opp = cds.count_opp().unwrap();
-        print_opp_matrix(&opp);
-        */
-
-        println!("");
-    }
-    */
-
-    // extract gene annotation from gff into struct Gene
-
-    let mut gff = match gff::Reader::from_file(gff_fn, gff::GffType::GFF3) {
-        Err(why) => panic!("{:?}", why),
-        Ok(reader) => reader,
-    };
-
-    let genes = Genes::from_gff(&mut gff);
-    println!("number of valid protein-coding genes: {}", genes.len());
-    println!("{:?}", genes);
-
-    let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
-        Err(why) => panic!("{:?}", why),
-        Ok(reader) => reader,
-    };
-
-    /*
-    let coord = &args[2];
-    // read only part of the fasta
-    if let Some((seqname, start, end)) = parse_coordinate(coord) {
-        println!("{} {} {}", seqname, start, end);
-        let mut seq: Vec<u8> = Vec::new();
-        match ifasta.read(&seqname, start, end, &mut seq) {
-            Err(why) => panic!("{:?}", why),
-            Ok(()) => print_seq(&seq),
-        }
-    } else {
-        panic!("Invalid coordinate: {}", coord);
-    }
-    */
-
-    // Open a file in write-only mode, returns `io::Result<File>`
-    let mut out_file = match File::create(&out_fn) {
-        Err(why) => panic!("Could not create {}: {:?}",
-                           out_fn,
-                           why),
-        Ok(file) => file,
-    };
-
-    if let Err(err) = genes.write_opps(&mut ifasta, &mut out_file) {
-        panic!("Could not write mutation opportunities to file: {}", err);
-    }
-
-    /*
-    let t = Transcript {
-       start: 0,
-       end: 1403,
-       coding_regions: vec![Region{start: 4, end: 10}, Region{start: 15, end: 18}],
-    };
-    */
-
-
-    /*
-    print_mutation_types();
-
-    print_mutation_channels();
-
-    let xs = mutation_channels();
-    for (i, x) in xs.iter().enumerate() {
-        println!("{} {}", i, x);
-    }
-    */
 }
 
 /// Assume that CDS are in order for features on the plus and the minus strand.
@@ -237,7 +242,7 @@ impl Genes {
     
     /// Write the mutation opporunity array of each gene to file.
     /// mut is needed for ifasta due to indexing
-    fn write_opps(&self, mut ifasta: &mut FastaIndexedReader, out: &mut File) -> io::Result<()> {
+    fn write_opps(&self, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File) -> io::Result<()> {
         use std::io::Write;
 
         let sep = "\t";
@@ -275,42 +280,5 @@ impl Genes {
         }
         
         Ok(())
-    }
-
-}
-
-
-/// Parse genomic coordinate.
-///
-/// Assume coordinate is specified in 1-based, closed format.
-/// Internally, coordinate is converted to 0-based, half-open format.
-///
-fn parse_coordinate(x: &str) -> Option<(String, u64, u64)> {
-    match x.find(':') {
-        Some(i) => {
-            let seqname = &x[..i];
-            let range = &x[i+1..];
-            match range.find('-') {
-                Some(j) => {
-                    let start = &range[..j];
-                    let end = &range[j+1..];
-                    if let Ok(start) = start.parse() {
-                        if let Ok(end) = end.parse() {
-                            if start > 0 && end > start {
-                                Some((String::from(seqname), start-1, end))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                },
-                None => None,
-            }
-        },
-        None => None,
     }
 }
