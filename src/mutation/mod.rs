@@ -34,12 +34,32 @@ impl fmt::Display for MutImpact {
     }
 }
 
-/*
-custom_derive! {
-    #[derive(NewtypeDebug)]
-    pub struct MutOpps([u32; n_mutation_types]);
+/// Mutation effect on a transcript from a protein-coding gene.
+/// All positions are 0-based
+pub struct MutEffect {
+    /// HGNC symbol of affected gene
+    gene_symbol: String,
+    /// ID of affected transcript
+    transcript_id: String,
+    /// Position of mutation in coding DNA sequence
+    c_pos: usize,
+    /// Offset from the coding sequence position to indicate intronic positions
+    c_offset: i32,
+    /// Position of mutation in protein sequence
+    p_pos: usize,
+    /// Reference nucleotide of the coding sequence
+    nt_ref: Nucleotide,
+    /// Alternate nucleotide of the coding sequence
+    nt_alt: Nucleotide,
+    /// Reference amino acid residue
+    aa_ref: Residue,
+    /// Alternate amino acid residue
+    aa_alt: Residue,
+    /// Mutation impact
+    impact: MutImpact,
+    /// Mutation type
+    type: usize,
 }
-*/
 
 pub struct MutOpps([u32; n_mutation_types]);
 

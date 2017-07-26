@@ -91,10 +91,15 @@ impl<'r, R: io::Read> Iterator for Records<'r, R> {
 
 /// A SNV record.
 pub struct Record {
+    /// Chromosome or contig name
     chrom: String,
+    /// Genomic position
     pos: u64,
-    ref_nt: u8,
-    alt_nt: u8,
+    /// Reference nucleotide on the positive/reference strand
+    ref_nt: Nucleotide,
+    /// Observed alternate nucleotide on the positive/reference strand
+    alt_nt: Nucleotide,
+    /// Sample ID
     sample: u32,
 }
 

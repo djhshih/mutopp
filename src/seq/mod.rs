@@ -149,11 +149,158 @@ fn codon_to_aa(codon: &Codon) -> Residue {
 }
 
 pub struct CodingSequence {
+    /// Coding sequences, each of which is contiguous in the genome
     pub seqs: Vec<DnaSeq>,
+    /// Number of nucleotides padded to the 5' and 3' 
     pub padding: usize,
+    /// Regions in genome coordinates
+    pub regions: Vec<Region>,
 }
 
 impl CodingSequence {
+    /// Assign type to observed mutation.
+    /// 
+    /// Assign type index to observed mutation at `cds_pos` with a 
+    /// possibly non-zero `offset` for mutations close to coding region 
+    /// (e.g. splicing site). Coding position 0 is the first nucleotide of 
+    /// the start codon. The query position, as well as both the 5' and 3'
+    /// positions, must be within the available padded coding sequence.
+    /// The `offset` cannot shift the query position outside the padded coding
+    /// sequence region containing `cds_pos`. 
+    pub fn assign_mutation(&self, cds_pos: usize, offset: i32, nt_ref: Nucleotide, nt_alt: Nucleotide) -> Option<usize> {
+        let padding = self.padding;
+        let seqs = &self.seqs;
+        
+        // find segment i containing coding_pos
+        // cds_begin and cds_end are coordinates in coding space
+        let mut cds_end = 0;
+        let mut cds_len = 0;
+        let mut i = 0;
+        for seq in seqs {
+            cds_len = seq.len() - (2 * padding);
+            cds_end += cds_len;
+            if (cds_pos < cum) break;
+            i += 1;
+        }
+        let cds_begin = coding_end - cds_len;
+        let phase = self.regions[i].phase;
+        assert!(phase >= 0 && phase <= 2);
+        let seq = seqs[i];
+        
+        // compute local index of the query position within CDS i
+        let local_idx = (cds_pos - cds_begin + padding) as i64 - offset;
+        
+        // Check if mutation occur outside the bounds of legal region
+        
+        // mutation cannot occur at (or before) first local index (0), because no 5' context is available
+        // mutation cannot occur at (or after) last local index (n - 1), because no 3' context is available
+        if local_idx <= 0 || local_idx + 1 >= seq.len() {
+            // NB  When seq.len() == 1, the mutation will not be assigned a type.
+            //     This can happen if the last nuleoide of the first exon is first position of the start codon
+            //     and the remaining two nucleotides of the start codon occur in the next exon.
+            //     But `padding` must have been set to 0, which provides no context to classify mutation.
+            //     If `padding > 1, then seq.len() >= 3, and this edge case will handled later.
+            //     Therefore, it is appropriate to not classify mutation here.
+            return None;
+        }
+        
+        let local_idx = local_idx as usize;
+        // check that mutation reference allele matches reference sequence
+        if seq[local_idx] != nt_ref {
+            return None;
+        }
+        // previous local index bound check ensures that nt_5p and nt_3p are well defined
+        let nt_5p = seq[local_idx - 1];
+        let nt_3p = seq[local_idx + 1];
+        
+        // Check whether mutation occurs at a splice site
+        
+        // padding must be at least 3 for splice site mutation to be considered
+        if padding >= 3 {
+            // acceptor splice site is the last two nucleotides of each intron,
+            // i.e. the two intronic nucleotides 5' of a CDS (but not the first CDS)
+            if (i > 0 && local_idx >= padding - 2 && local_idx < padding) ||
+            // donor splice site is the first two nucleotides of each intron,
+            // i.e. the two intronic nucleotides 3' of a CDS (but not the last CDS)
+            (i < seqs.len() - 1 && local_idx >= padding + cds_len && local_idx < padding + cds_len + 2) {
+                return index(MutImpact::SpliceSite, nt_ref, nt_alt, nt_5p, nt_3p);
+            }
+        }
+        
+        // Check whether mutation occurs in coding region
+        
+        let local_cds_begin = padding;
+        let local_cds_end = padding + cds_len;
+        if (local_idx >= local_cds_begin && local_idx < local_cds_end) {
+        
+            // find the codon that encompasses the query position; henceforth, query codon
+            let codon: [Nucleotide; 3];
+            // codon position of the query {0, 1, 2}
+            let codon_pos: usize;
+            if local_idx < phase {
+                // query codon begins in the previous CDS
+                if i == 0 {
+                    // Invalid input arguments: first CDS should begin with phase = 0
+                    return None;
+                }
+                let seq_prev = seqs[i-1];
+                let seq_prev_cds_end = seq_prev.len() - padding;
+                let seq_prev_cds_len = seq_prev_cds_end - padding;
+                if seq_prev_cds_len < phase {
+                    // Invalid input arguments:
+                    // there is not enough CDS nucleotides in the previous CDS
+                    return None;
+                }
+                codon = match phase {
+                    1 => [seq_prev[seq_prev_cds_end - 2], seq_prev[seq_prev_cds_end - 1], seq[local_codon_begin]],
+                    2 => [seq_prev[seq_prev_cds_end - 1], seq[local_codon_begin], seq[local_codon_begin+1]],
+                    _ => panic!("Invalid phase value"),
+                };
+                codon_pos = 3 - phase;
+            } else {
+                codon_pos = ((local_idx - phase) % 3);
+                
+                // local index of the start of the query codon
+                let local_codon_begin = local_idx - codon_pos;
+                
+                if local_codon_begin + 2 >= local_cds_end - 1 {
+                    // codon extends into the next CDS
+                    if i == seqs.len() - 1 {
+                        // Invalid input arguments: codon is incomplete and no more CDS available
+                        return None;
+                    }
+                    let seq_next = seqs[i+1];
+                    if local_codon_begin + 1 < local_cds_end {
+                        // codon extends 1 nt into the next CDS
+                        codon = [seq[local_codon_begin], seq[local_codon_begin+1], seq_next[padding]];
+                    } else {
+                        // codon extends 2 nt into the next CDS
+                        codon = [seq[local_codon_begin], seq_next[padding], seq_next[padding+1]];
+                    }
+                } else {
+                    // codon is within the current CDS
+                    codon = [seq[local_codon_begin], seq[local_codon_begin+1], seq[local_codon_begin+2]];
+                }
+            }
+            
+            let context = [nt_5p, nt_ref, nt_3p];
+            
+            let aa_ref = if i == 0 && local_codon_begin == local_cds_begin {
+                // first codon of the first CDS is the start codon
+                // this is usually ATG but alternative start codons are possible
+                b'^'
+            } else {
+                codon_to_aa(&codon_ref)
+            };
+            
+            let cl = mutimpact_at_codon_pos(codon_pos, codon, aa_ref, context, nt_alt);
+            return index(cl, nt_ref, nt_alt, nt_5p, nt_3p);
+        }
+
+        // mutation cannot be assigned a type
+        return None;
+    }
+    
     /// Count mutation opportunities.
     ///
     /// Each CDS must be a contiguous sequence in the genome (i.e. exons are not joined together).
@@ -407,24 +554,29 @@ fn count_opp_at_codon_pos(x: &mut MutOpps, pos: usize, codon: &[u8; 3], aa_ref: 
     // iterate through possible substitutions
     for &nt_alt in nucleotides.iter() {
         if nt_alt != nt_ref {
-            let cl = if aa_ref == b'^' {
-                // assume that any mutation at start codon causes start codon loss
-                // this is true for ATG start codon (no degeneracy) and
-                // probably true for alternative start codons as well
-                MutImpact::StartOrStop
-            } else {
-                let codon_alt = mutate_codon(&codon, pos, nt_alt);
-                let aa_alt = codon_to_aa(&codon_alt);
-                if aa_alt == aa_ref {
-                    MutImpact::Synonymous 
-                } else if aa_ref == b'$' || aa_alt == b'$' {
-                    MutImpact::StartOrStop
-                } else {
-                    MutImpact::Missense
-                }
-            };
+            let cl = mutimpact_at_codon_pos(pos, codon, aa_ref, context, nt_alt);
             let idx = MutOpps::index(cl, nt_ref, nt_alt, context[0], context[2]);
             x[idx] += 1;
+        }
+    }
+}
+
+/// Assign mutation impact for observed mutation at codon position.
+fn mutimpact_at_codon_pos(pos: usize, codon: &[u8; 3], aa_ref: u8, context: &[u8; 3], nt_alt: u8) {
+    if aa_ref == b'^' {
+        // assume that any mutation at start codon causes start codon loss
+        // this is true for ATG start codon (no degeneracy) and
+        // probably true for alternative start codons as well
+        MutImpact::StartOrStop
+    } else {
+        let codon_alt = mutate_codon(&codon, pos, nt_alt);
+        let aa_alt = codon_to_aa(&codon_alt);
+        if aa_alt == aa_ref {
+            MutImpact::Synonymous 
+        } else if aa_ref == b'$' || aa_alt == b'$' {
+            MutImpact::StartOrStop
+        } else {
+            MutImpact::Missense
         }
     }
 }

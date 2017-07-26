@@ -18,9 +18,11 @@ use mutopp::gene::{Gene,Transcript,Region,HashMap,Strand};
 use mutopp::seq::{self,CodingSequence};
 use mutopp::mutation::MutOpps;
 use mutopp::utils;
+use mutopp::io::snv;
 
 type FastaIndexedReader = fasta::IndexedReader<fs::File>;
 type GffReader = gff::Reader<fs::File>;
+type SnvReader = snv::Reader<fs::File>;
 
 fn main() {
     let matches = App::new("mutopp")
@@ -147,11 +149,11 @@ fn main() {
 
 /// Assume that CDS are in order for features on the plus and the minus strand.
 /// For features on the minus strand specifically, the positions of the CDS is in descending order
-fn get_transcript_cds_from_fasta(reader: &mut FastaIndexedReader, transcript: &Transcript, chromosome: &str, strand: Strand, padding: usize) -> CodingSequence {
+fn get_transcript_cds_from_fasta(reader: &mut FastaIndexedReader, transcript: &Transcript, chrom: &str, strand: Strand, padding: usize) -> CodingSequence {
     let n = transcript.coding_regions.len();
     let mut seqs: seq::DnaSeqs = vec![Vec::new(); n];
     for (i, region) in transcript.coding_regions.iter().enumerate() {
-        if let Err(why) = reader.read(chromosome, region.start - padding as u64, region.end + padding as u64, &mut seqs[i]) {
+        if let Err(why) = reader.read(chrom, region.start - padding as u64, region.end + padding as u64, &mut seqs[i]) {
             panic!("{:?}", why);
         }
         if strand == Strand::Reverse {
@@ -159,7 +161,7 @@ fn get_transcript_cds_from_fasta(reader: &mut FastaIndexedReader, transcript: &T
         }
     }
     
-    CodingSequence { seqs: seqs, padding: padding }
+    CodingSequence { seqs: seqs, padding: padding, regions: coding_regions.clone() }
 }
 
 fn attribute_filter(attrs: &MultiMap<String, String>, key: &str, target: &str) -> bool {
@@ -169,12 +171,12 @@ fn attribute_filter(attrs: &MultiMap<String, String>, key: &str, target: &str) -
     }
 }
 
-fn parse_phase(phase: &str) -> i8 {
+fn parse_phase(phase: &str) -> u8 {
     match phase {
         "0" => 0,
         "1" => 1,
         "2" => 2,
-        _ => -1,
+        _ => 0,
     }
 }
 
@@ -202,7 +204,7 @@ impl Genes {
                             attrs.get("gene_id").unwrap().clone(),
                             Gene {
                                 name: attrs.get("gene_name").unwrap().clone(),
-                                chromosome: record.seqname().to_owned(),
+                                chrom: record.seqname().to_owned(),
                                 start: *record.start() - 1,
                                 end: *record.end(),
                                 strand: record.strand().unwrap(),
@@ -261,7 +263,7 @@ impl Genes {
 
         let sep = "\t";
 
-        let mut header = vec![String::from("gene"), String::from("symbol"), String::from("transcript")];
+        let mut header = vec![String::from("transcript"), String::from("symbol")];
         header.extend(MutOpps::types());
 
         try!(writeln!(out, "{}", header.join(sep)));
@@ -269,18 +271,18 @@ impl Genes {
         for (gid, gene) in self.0.iter() {
             for (tid, transcript) in gene.transcripts.iter() {
                 let padding = 3;
-                let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chromosome, gene.strand, padding);
+                let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chrom, gene.strand, padding);
                 let pseq = if cds.seqs.len() > 0 && cds.seqs[0].len() > padding + 6 {
                     str::from_utf8(&cds.seqs[0][0 .. padding]).unwrap().to_lowercase() +
                         str::from_utf8(&cds.seqs[0][padding .. padding + 6]).unwrap()
                 } else {
                     String::new()
                 };
-                print!("{} {} {} {}... ", gid, gene.name, tid, pseq);
+                print!("{} {} {} {}... ", gid, tid, gene.name, pseq);
                 // sequence may not have 9 nucleotides!
                 //println!("{} {} {} {}...", gid, gene.name, tid, str::from_utf8(&cds.seqs[0][0..9]).unwrap());
                 if let Some(opp) = cds.count_opp() {
-                    let mut line = vec![gid.clone(), gene.name.clone(), tid.clone()].join(sep);
+                    let mut line = vec![tid.clone(), gene.name.clone()].join(sep);
                     for o in opp.iter() {
                         line.push_str(sep);
                         line.push_str(&o.to_string());
