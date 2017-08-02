@@ -1,2 +1,3 @@
+chrom	pos	ref	alt	sample_id
 chr1	36	C	G	1
 chr1	36	C	T	2
