@@ -440,7 +440,6 @@ impl Genes {
         Ok(())
     }
     
-    // TODO
     pub fn write_counts(&self, mut snv: &mut SnvReader, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File) -> io::Result<()> {
         use std::io::Write;
         
@@ -452,7 +451,7 @@ impl Genes {
         // count mutation types
         for s in snv.records() {
             let record = s.ok().expect("Error reading SNV record");
-            print!("{} {}:g.{}{}>{} ... ", record.sample_id, record.chrom, record.pos, record.nt_ref, record.nt_alt);
+            print!("{} ... ", record);
             
             let sample_muts_map = muts_map.entry(record.sample_id).or_insert(LinkedHashMap::new());
             let mut in_coding = false;
@@ -510,28 +509,29 @@ impl Genes {
         
         for s in snv.records() {
             let record = s.ok().expect("Error reading SNV record");
-            println!("{} {}:g.{}{}>{} {{", record.sample_id, record.chrom, record.pos, record.nt_ref, record.nt_alt);
+            println!("{}", record);
 
             let overlap = self.find_overlap(&record.chrom, record.pos, record.pos + 1);
             for gid in overlap.iter() {
                 let gene = self.map.get(gid).unwrap();
                 println!("{}: {{", gene.name);
                 for (tid, transcript) in gene.transcripts.iter() {
-                    print!("{}: ", tid);
+                    print!("    {}: ", tid);
                     let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chrom, gene.strand, CDS_PADDING);
                     if let Some(effect) = cds.assign_mutation(gene, transcript, record.pos, record.nt_ref, record.nt_alt) {
-                        let line = vec![record.chrom.clone(), record.pos.to_string(), record.nt_ref.to_string(), record.nt_alt.to_string(),
+                        let line = vec![record.chrom.clone(), (record.pos + 1).to_string(),
+                            str::from_utf8(&[record.nt_ref]).unwrap().to_owned(),
+                            str::from_utf8(&[record.nt_alt]).unwrap().to_owned(),
                             record.sample_id.to_string(), tid.clone(), gene.name.clone(),
                             effect.cdna_change(), effect.protein_change(), effect.impact.to_string(), effect.type_index.to_string()].join(sep);
                         try!(writeln!(out, "{}", line));
-                        println!("{}", effect.impact.to_string());
+                        println!("{},", effect.impact.to_string());
                     } else {
-                        println!("none");
+                        println!("none,");
                     }
                 }
                 println!("}}");
             }
-            println!("}}");
         }
         
         Ok(())

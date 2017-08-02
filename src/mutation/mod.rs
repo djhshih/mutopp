@@ -75,11 +75,11 @@ impl MutEffect {
     pub fn cdna_change(&self) -> String {
         match self.impact {
             MutImpact::Synonymous | MutImpact::Missense | MutImpact::StartOrStop => {
-                format!("c.{}{}>{}", self.cdna_pos(), self.nt_ref, self.nt_alt)
+                format!("c.{}{}>{}", self.cdna_pos(), self.nt_ref as char, self.nt_alt as char)
             },
             MutImpact::SpliceSite => {
                 let op = if self.c_offset >= 0 { '+' } else { '-' };
-                format!("c.{}{}{}{}>{}", self.cdna_pos(), op, self.c_offset, self.nt_ref, self.nt_alt)
+                format!("c.{}{}{}{}>{}", self.cdna_pos(), op, self.c_offset, self.nt_ref as char, self.nt_alt as char)
             },
         }
     }
@@ -87,10 +87,10 @@ impl MutEffect {
     pub fn protein_change(&self) -> String {
         match self.impact {
             MutImpact::Synonymous => {
-                format!("p.{}{}=", self.aa_ref, self.aa_pos())
+                format!("p.{}{}=", self.aa_ref as char, self.aa_pos())
             },
             MutImpact::Missense => {
-                format!("p.{}{}{}", self.aa_ref, self.aa_pos(), self.aa_alt)
+                format!("p.{}{}{}", self.aa_ref as char, self.aa_pos(), self.aa_alt as char)
             },
             MutImpact::StartOrStop => {
                 if self.aa_ref == b'^' {
@@ -100,10 +100,10 @@ impl MutEffect {
                     // stop-lost or no-stop
                     // NB stop-lost and no-stop are currently not distinguished;
                     //    we do not track where the new stop codon would eventually occur
-                    format!("p.*{}{}ext*?", self.aa_pos(), self.aa_alt)
+                    format!("p.*{}{}ext*?", self.aa_pos(), self.aa_alt as char)
                 } else if self.aa_alt == b'$' {
                     // stop-gained
-                    format!("p.{}{}*", self.aa_ref, self.aa_pos())
+                    format!("p.{}{}*", self.aa_ref as char, self.aa_pos())
                 } else {
                     // NB start-gained is currently not annotated!
                     String::from("p.?")

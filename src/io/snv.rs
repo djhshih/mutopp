@@ -4,6 +4,7 @@ use std::path::Path;
 use std::convert::AsRef;
 use std::result;
 use std::num;
+use std::fmt;
 
 use csv;
 use crc::crc32;
@@ -107,6 +108,13 @@ pub struct Record {
     pub sample_id: u32,
 }
 
+
+impl fmt::Display for Record {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}@{}:g.{}{}>{}", self.sample_id, self.chrom, self.pos + 1, self.nt_ref as char, self.nt_alt as char)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,10 +136,10 @@ mod tests {
         for (i, r) in reader.records().enumerate() {
             let record = r.ok().expect("Error reading record");
             assert_eq!(record.chrom, chroms[i]);
-            assert_eq!(record.pos, poss[i]);
+            assert_eq!(record.pos + 1, poss[i]);
             assert_eq!(record.nt_ref, nts_ref[i]);
             assert_eq!(record.nt_alt, nts_alt[i]);
-            assert_eq!(record.sample, samples[i]);
+            assert_eq!(record.sample_id, samples[i]);
         }
     }
 }
