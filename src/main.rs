@@ -46,8 +46,22 @@ fn main() {
             .arg(Arg::with_name("output")
                 .help("output file")
                 .required(true)))
+        .subcommand(SubCommand::with_name("count")
+            .about("count mutation types in observed mutations")
+            .arg(Arg::with_name("fasta")
+                .help("input indexed .fasta file (index .fasta.fai file must exist)")
+                .required(true))
+            .arg(Arg::with_name("gff")
+                .help("input gene annotation .gff3 file")
+                .required(true))
+            .arg(Arg::with_name("snv")
+                .help("input aggregated mutations tab-separated file (fields: chrom pos ref alt [sample])")
+                .required(true))
+            .arg(Arg::with_name("output")
+                .help("output file")
+                .required(true)))
         .subcommand(SubCommand::with_name("annotate")
-            .about("annotate mutation types in observed mutations")
+            .about("annotate observed mutations")
             .arg(Arg::with_name("fasta")
                 .help("input indexed .fasta file (index .fasta.fai file must exist)")
                 .required(true))
@@ -113,6 +127,44 @@ fn main() {
         },
         Some("count") => {
             let m = matches.subcommand_matches("count").unwrap();
+            let ref fasta_fn = m.value_of("fasta").unwrap();
+            let ref gff_fn = m.value_of("gff").unwrap();
+            let ref snv_fn = m.value_of("snv").unwrap();
+            let ref out_fn = m.value_of("output").unwrap();
+            
+            let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
+                Err(why) => panic!("{:?}", why),
+                Ok(reader) => reader,
+            };
+            
+            let mut snv = match snv::Reader::from_file(snv_fn) {
+                Err(why) => panic!("{:?}", why),
+                Ok(reader) => reader,
+            };
+            
+            let mut gff = match gff::Reader::from_file(gff_fn, gff::GffType::GFF3) {
+                Err(why) => panic!("{:?}", why),
+                Ok(reader) => reader,
+            };
+
+            let genes = Genes::from_gff(&mut gff);
+            println!("number of valid protein-coding genes: {}", genes.len());
+            println!("{:?}", genes);
+            
+            // Open a file in write-only mode, returns `io::Result<fs::File>`
+            let mut out_file = match fs::File::create(&out_fn) {
+                Err(why) => panic!("Could not create {}: {:?}",
+                                out_fn,
+                                why),
+                Ok(file) => file,
+            };
+
+            if let Err(why) = genes.write_counts(&mut snv, &mut ifasta, &mut out_file) {
+                panic!("Could not write mutation type counts to file: {}", why);
+            }
+        },
+        Some("annotate") => {
+            let m = matches.subcommand_matches("annotate").unwrap();
             let ref fasta_fn = m.value_of("fasta").unwrap();
             let ref gff_fn = m.value_of("gff").unwrap();
             let ref snv_fn = m.value_of("snv").unwrap();
@@ -358,7 +410,7 @@ impl Genes {
         header.extend(MutOpps::types());
 
         try!(writeln!(out, "{}", header.join(sep)));
-
+        
         for (gid, gene) in self.map.iter() {
             for (tid, transcript) in gene.transcripts.iter() {
                 let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chrom, gene.strand, CDS_PADDING);
@@ -368,7 +420,7 @@ impl Genes {
                 } else {
                     String::new()
                 };
-                print!("{} {} {} {}... ", gid, tid, gene.name, pseq);
+                print!("{} {} {} {} ... ", gid, tid, gene.name, pseq);
                 // sequence may not have 9 nucleotides!
                 //println!("{} {} {} {}...", gid, gene.name, tid, str::from_utf8(&cds.seqs[0][0..9]).unwrap());
                 if let Some(opp) = cds.count_opp() {
@@ -388,34 +440,98 @@ impl Genes {
         Ok(())
     }
     
-    pub fn write_annotations(&self, mut snv: &mut SnvReader, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File) -> io::Result<()> {
+    // TODO
+    pub fn write_counts(&self, mut snv: &mut SnvReader, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File) -> io::Result<()> {
         use std::io::Write;
         
         let sep = "\t";
-
-        let header = vec![String::from("chrom"), String::from("pos"), String::from("ref"), 
-        String::from("alt"), String::from("sample"), String::from("gene_symbol"), String::from("transcript_id"),
-        String::from("cdna_change"), String::from("protein_change"), String::from("impact"), String::from("type_index")];
         
-        try!(writeln!(out, "{}", header.join(sep)));
+        // mutation type counts map -- key1: sample_id; key2: transcript_id
+        let mut muts_map: LinkedHashMap<u32, LinkedHashMap<String, MutOpps>> = LinkedHashMap::new();
         
+        // count mutation types
         for s in snv.records() {
             let record = s.ok().expect("Error reading SNV record");
-            println!("{}:g.{}{}>{} {}", record.chrom, record.pos, record.nt_ref, record.nt_alt, record.sample);
-
+            print!("{} {}:g.{}{}>{} ... ", record.sample_id, record.chrom, record.pos, record.nt_ref, record.nt_alt);
+            
+            let sample_muts_map = muts_map.entry(record.sample_id).or_insert(LinkedHashMap::new());
+            let mut in_coding = false;
             let overlap = self.find_overlap(&record.chrom, record.pos, record.pos + 1);
             for gid in overlap.iter() {
                 let gene = self.map.get(gid).unwrap();
                 for (tid, transcript) in gene.transcripts.iter() {
                     let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chrom, gene.strand, CDS_PADDING);
                     if let Some(effect) = cds.assign_mutation(gene, transcript, record.pos, record.nt_ref, record.nt_alt) {
-                        let line = vec![record.chrom.clone(), record.pos.to_string(), record.nt_ref.to_string(), record.nt_alt.to_string(),
-                            record.sample.to_string(), gene.name.clone(), tid.clone(),
-                            effect.cdna_change(), effect.protein_change(), effect.impact.to_string(), effect.type_index.to_string()].join(sep);
-                        try!(writeln!(out, "{}", line));
+                        let t_muts = sample_muts_map.entry(tid.clone()).or_insert(MutOpps::new());
+                        t_muts[effect.type_index] += 1;
+                        in_coding = true;
                     }
                 }
             }
+            
+            if in_coding {
+                println!("in");
+            } else {
+                println!("out");
+            }
+        }
+        
+        // write header
+        let mut header = vec![String::from("sample_id"), String::from("transcript_id")];
+        header.extend(MutOpps::types());
+        try!(writeln!(out, "{}", header.join(sep)));
+        
+        // write opportunities to file
+        for (sid, sample_muts_map) in muts_map.iter() {
+            for (tid, t_muts) in sample_muts_map.iter() {
+                let mut line = vec![sid.to_string(), tid.clone()].join(sep);
+                for x in t_muts.iter() {
+                    line.push_str(sep);
+                    line.push_str(&x.to_string());
+                }
+                try!(writeln!(out, "{}", line));
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Write mutation annotations to file.
+    pub fn write_annotations(&self, mut snv: &mut SnvReader, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File) -> io::Result<()> {
+        use std::io::Write;
+        
+        let sep = "\t";
+
+        let header = vec![String::from("chrom"), String::from("pos"), String::from("ref"), 
+        String::from("alt"), String::from("sample_id"), String::from("transcript_id"), String::from("gene_symbol"), 
+        String::from("cdna_change"), String::from("protein_change"), String::from("impact"), String::from("type_index")];
+        
+        try!(writeln!(out, "{}", header.join(sep)));
+        
+        for s in snv.records() {
+            let record = s.ok().expect("Error reading SNV record");
+            println!("{} {}:g.{}{}>{} {{", record.sample_id, record.chrom, record.pos, record.nt_ref, record.nt_alt);
+
+            let overlap = self.find_overlap(&record.chrom, record.pos, record.pos + 1);
+            for gid in overlap.iter() {
+                let gene = self.map.get(gid).unwrap();
+                println!("{}: {{", gene.name);
+                for (tid, transcript) in gene.transcripts.iter() {
+                    print!("{}: ", tid);
+                    let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chrom, gene.strand, CDS_PADDING);
+                    if let Some(effect) = cds.assign_mutation(gene, transcript, record.pos, record.nt_ref, record.nt_alt) {
+                        let line = vec![record.chrom.clone(), record.pos.to_string(), record.nt_ref.to_string(), record.nt_alt.to_string(),
+                            record.sample_id.to_string(), tid.clone(), gene.name.clone(),
+                            effect.cdna_change(), effect.protein_change(), effect.impact.to_string(), effect.type_index.to_string()].join(sep);
+                        try!(writeln!(out, "{}", line));
+                        println!("{}", effect.impact.to_string());
+                    } else {
+                        println!("none");
+                    }
+                }
+                println!("}}");
+            }
+            println!("}}");
         }
         
         Ok(())

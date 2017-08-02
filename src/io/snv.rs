@@ -81,7 +81,7 @@ impl<'r, R: io::Read> Iterator for Records<'r, R> {
                         nt_alt: try!(record.get(3)
                             .ok_or(Error::MissingField("alt".to_owned()))
                             .map(|x| x.chars().nth(0).unwrap() as u8)),
-                        sample: record.get(4)
+                        sample_id: record.get(4)
                             .and_then(|x| match x.parse::<u32>() {
                                 // apply CRC32 hash to string
                                 Err(_) => Some(crc32::checksum_ieee(x.as_bytes())),
@@ -104,7 +104,7 @@ pub struct Record {
     /// Observed alternate nucleotide on the positive/reference strand
     pub nt_alt: Nucleotide,
     /// Sample ID
-    pub sample: u32,
+    pub sample_id: u32,
 }
 
 #[cfg(test)]
