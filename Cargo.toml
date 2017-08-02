@@ -7,6 +7,7 @@ authors = ["David J. H. Shih <djh.shih@gmail.com>"]
 bio = "0.14.1"
 rusqlite = "0.12.0"
 multimap = "0.4"
+linked-hash-map = "0.5"
 clap = "2.25.0"
 csv = "1.0.0-beta.3"
 crc = "1.4.0"

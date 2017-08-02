@@ -8,6 +8,8 @@ use std::num;
 use csv;
 use crc::crc32;
 
+use seq::{Nucleotide,Residue};
+
 /// A SNV reader.
 pub struct Reader<R: io::Read> {
     inner: csv::Reader<R>,
@@ -70,11 +72,13 @@ impl<'r, R: io::Read> Iterator for Records<'r, R> {
                             .map(|x| String::from(x))),
                         pos: try!(record.get(1)
                             .ok_or(Error::MissingField("pos".to_owned()))
-                            .and_then(|x| x.parse::<u64>().map_err(Error::ParseInt))),
-                        ref_nt: try!(record.get(2)
+                            .and_then(|x| x.parse::<u64>().map_err(Error::ParseInt))
+                            // convert from 1-based to 0-based coordinate
+                            .map(|x| x - 1)),
+                        nt_ref: try!(record.get(2)
                             .ok_or(Error::MissingField("ref".to_owned()))
                             .map(|x| x.chars().nth(0).unwrap() as u8)),
-                        alt_nt: try!(record.get(3)
+                        nt_alt: try!(record.get(3)
                             .ok_or(Error::MissingField("alt".to_owned()))
                             .map(|x| x.chars().nth(0).unwrap() as u8)),
                         sample: record.get(4)
@@ -92,15 +96,15 @@ impl<'r, R: io::Read> Iterator for Records<'r, R> {
 /// A SNV record.
 pub struct Record {
     /// Chromosome or contig name
-    chrom: String,
+    pub chrom: String,
     /// Genomic position
-    pos: u64,
+    pub pos: u64,
     /// Reference nucleotide on the positive/reference strand
-    ref_nt: Nucleotide,
+    pub nt_ref: Nucleotide,
     /// Observed alternate nucleotide on the positive/reference strand
-    alt_nt: Nucleotide,
+    pub nt_alt: Nucleotide,
     /// Sample ID
-    sample: u32,
+    pub sample: u32,
 }
 
 #[cfg(test)]
@@ -116,8 +120,8 @@ mod tests {
     fn test_reader() {
         let chroms = ["2", "3"];
         let poss = [1525, 1602];
-        let ref_nts = [b'A', b'G'];
-        let alt_nts = [b'C', b'C'];
+        let nts_ref = [b'A', b'G'];
+        let nts_alt = [b'C', b'C'];
         let samples = [1, 0x56d1c50a];
         
         let mut reader = Reader::new(SNV_FILE);
@@ -125,8 +129,8 @@ mod tests {
             let record = r.ok().expect("Error reading record");
             assert_eq!(record.chrom, chroms[i]);
             assert_eq!(record.pos, poss[i]);
-            assert_eq!(record.ref_nt, ref_nts[i]);
-            assert_eq!(record.alt_nt, alt_nts[i]);
+            assert_eq!(record.nt_ref, nts_ref[i]);
+            assert_eq!(record.nt_alt, nts_alt[i]);
             assert_eq!(record.sample, samples[i]);
         }
     }

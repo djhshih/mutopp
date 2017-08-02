@@ -3,6 +3,8 @@ use std::ops;
 use std::ascii::AsciiExt;
 use std::slice;
 
+use gene::Pos;
+use seq::{Nucleotide,Residue};
 use constants::*;
 
 #[derive(Copy,Clone)]
@@ -38,27 +40,78 @@ impl fmt::Display for MutImpact {
 /// All positions are 0-based
 pub struct MutEffect {
     /// HGNC symbol of affected gene
-    gene_symbol: String,
+    //gene_symbol: String,
     /// ID of affected transcript
-    transcript_id: String,
+    //transcript_id: String,
     /// Position of mutation in coding DNA sequence
-    c_pos: usize,
+    pub c_pos: Pos,
     /// Offset from the coding sequence position to indicate intronic positions
-    c_offset: i32,
-    /// Position of mutation in protein sequence
-    p_pos: usize,
+    pub c_offset: i32,
     /// Reference nucleotide of the coding sequence
-    nt_ref: Nucleotide,
+    pub nt_ref: Nucleotide,
     /// Alternate nucleotide of the coding sequence
-    nt_alt: Nucleotide,
+    pub nt_alt: Nucleotide,
     /// Reference amino acid residue
-    aa_ref: Residue,
+    pub aa_ref: Residue,
     /// Alternate amino acid residue
-    aa_alt: Residue,
+    pub aa_alt: Residue,
     /// Mutation impact
-    impact: MutImpact,
-    /// Mutation type
-    type: usize,
+    pub impact: MutImpact,
+    /// Mutation type index
+    pub type_index: usize,
+}
+
+impl MutEffect {
+    #[inline]
+    pub fn cdna_pos(&self) -> Pos {
+        self.c_pos + 1
+    }
+    
+    #[inline]
+    pub fn aa_pos(&self) -> Pos {
+        (self.c_pos % 3) + 1
+    }
+    
+    pub fn cdna_change(&self) -> String {
+        match self.impact {
+            MutImpact::Synonymous | MutImpact::Missense | MutImpact::StartOrStop => {
+                format!("c.{}{}>{}", self.cdna_pos(), self.nt_ref, self.nt_alt)
+            },
+            MutImpact::SpliceSite => {
+                let op = if self.c_offset >= 0 { '+' } else { '-' };
+                format!("c.{}{}{}{}>{}", self.cdna_pos(), op, self.c_offset, self.nt_ref, self.nt_alt)
+            },
+        }
+    }
+    
+    pub fn protein_change(&self) -> String {
+        match self.impact {
+            MutImpact::Synonymous => {
+                format!("p.{}{}=", self.aa_ref, self.aa_pos())
+            },
+            MutImpact::Missense => {
+                format!("p.{}{}{}", self.aa_ref, self.aa_pos(), self.aa_alt)
+            },
+            MutImpact::StartOrStop => {
+                if self.aa_ref == b'^' {
+                    // start-lost
+                    String::from("p.M1?")
+                } else if self.aa_ref == b'$' {
+                    // stop-lost or no-stop
+                    // NB stop-lost and no-stop are currently not distinguished;
+                    //    we do not track where the new stop codon would eventually occur
+                    format!("p.*{}{}ext*?", self.aa_pos(), self.aa_alt)
+                } else if self.aa_alt == b'$' {
+                    // stop-gained
+                    format!("p.{}{}*", self.aa_ref, self.aa_pos())
+                } else {
+                    // NB start-gained is currently not annotated!
+                    String::from("p.?")
+                }
+            },
+            MutImpact::SpliceSite => String::from("p."),
+        }
+    }
 }
 
 pub struct MutOpps([u32; n_mutation_types]);

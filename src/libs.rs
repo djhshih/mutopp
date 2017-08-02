@@ -1,6 +1,7 @@
 extern crate bio;
 extern crate csv;
 extern crate crc;
+extern crate linked_hash_map;
 
 pub mod seq;
 pub mod mutation;

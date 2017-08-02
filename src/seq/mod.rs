@@ -1,6 +1,9 @@
 use std::str;
 
-use mutation::{MutImpact, MutOpps};
+use bio::utils::Strand;
+
+use gene::{Gene,Transcript};
+use mutation::{MutImpact, MutOpps, MutEffect};
 use constants::*;
 
 pub type Nucleotide = u8;
@@ -19,6 +22,10 @@ pub fn complement(x: Nucleotide) -> Nucleotide {
         b'C' => b'G',
         b'G' => b'C',
         b'T' => b'A',
+        b'a' => b't',
+        b'c' => b'g',
+        b'g' => b'c',
+        b't' => b'a',
         _ => b'X',
     }
 }
@@ -144,17 +151,16 @@ fn codon_to_aa(codon: &Codon) -> Residue {
         b"TAT" | b"TAC" => b'Y',
         b"GTT" | b"GTC" | b"GTA" | b"GTG" => b'V',
         b"TAA" | b"TGA" | b"TAG" => b'$',
-        _ => b'X',
+        _ => b'.',
     }
 }
 
 pub struct CodingSequence {
     /// Coding sequences, each of which is contiguous in the genome
+    /// If a feature is on the reverse strand, the sequence should have already been reverse-complemented.
     pub seqs: Vec<DnaSeq>,
     /// Number of nucleotides padded to the 5' and 3' 
     pub padding: usize,
-    /// Regions in genome coordinates
-    pub regions: Vec<Region>,
 }
 
 impl CodingSequence {
@@ -167,39 +173,149 @@ impl CodingSequence {
     /// positions, must be within the available padded coding sequence.
     /// The `offset` cannot shift the query position outside the padded coding
     /// sequence region containing `cds_pos`. 
-    pub fn assign_mutation(&self, cds_pos: usize, offset: i32, nt_ref: Nucleotide, nt_alt: Nucleotide) -> Option<usize> {
+    pub fn assign_mutation(&self, gene: &Gene, transcript: &Transcript, g_pos: u64, g_nt_ref: Nucleotide, g_nt_alt: Nucleotide) -> Option<MutEffect> {
         let padding = self.padding;
         let seqs = &self.seqs;
+        let strand = gene.strand;
+        let regions = &transcript.coding_regions;
         
+        let splice_site_len: u64 = 2;
+        
+        // find CDS region i (including splice site) that contains g_pos
+        // convert genomic position to CDS position with possibly non-zero offset
+        let mut c_pos: u64 = 0;
+        let mut offset: i64 = 0;
+        let nt_ref: Nucleotide;
+        let nt_alt: Nucleotide;
+        match strand {
+            Strand::Forward => {
+                nt_ref = g_nt_ref;
+                nt_alt = g_nt_alt;
+                let mut i = 0;
+                for region in regions {
+                    // pad region to include splice sites,
+                    // but splice site padding do not apply to first and last CDS
+                    let start_pad: u64 = if i == 0 { 0 } else { splice_site_len };
+                    let end_pad: u64 = if i == regions.len() - 1 { 0 } else { splice_site_len };
+                    if g_pos < region.end + end_pad {
+                        let left = if region.start > start_pad {
+                            region.start - start_pad
+                        } else { 0 };
+                        if g_pos >= left {
+                            // found region
+                            if g_pos < region.start {
+                                // acceptor splice site (5' of CDS)
+                                // leave c_pos at first nucleotide of current CDS but update offset
+                                offset = -((region.start - g_pos) as i64);
+                            } else if g_pos >= region.end {
+                                // donor splice site (3' of CDS)
+                                // set c_pos to last nucleotide of current CDS and update offset
+                                c_pos += region.end - region.start;
+                                offset = (g_pos - (region.end - 1)) as i64;
+                            } else {
+                                // in coding region
+                                c_pos += g_pos - region.start;
+                                offset = 0;
+                            }
+                            break;
+                        } else {
+                            // since regions are sorted, g_pos is not in a region
+                            return None;
+                        }
+                    }
+                    c_pos += region.end - region.start;
+                    i += 1;
+                }
+            },
+            Strand::Reverse => {
+                // complement the nucleotides to convert them from genomic space to coding space
+                nt_ref = complement(g_nt_ref);
+                nt_alt = complement(g_nt_alt);
+                let mut i = 0;
+                for region in regions {
+                    // pad region to include splice sites,
+                    // but splice site padding do not apply to first and last CDS
+                    let start_pad: u64 = if i == 0 { 0 } else { splice_site_len };
+                    let end_pad: u64 = if i == regions.len() - 1 { 0 } else { splice_site_len };
+                    // regions are in genomic coordinates but listed in 5' to 3' order of the gene
+                    // therefore, the start coordinate of each CDS correspond to the end of the region,
+                    // and the end coordinate correspond to the start of the region
+                    // futher, regions are in [region.start, region.end)
+                    let right = region.end + start_pad;
+                    if g_pos < right {
+                        let left = if region.start > end_pad {
+                            region.start - end_pad
+                        } else { 0 };
+                        if g_pos >= left {
+                            // found region
+                            if g_pos < region.start {
+                                // donor splice site (3' of CDS)
+                                // set c_pos to last nucleotide of current CDS and update offset
+                                c_pos += region.end - region.start;
+                                offset = (region.start - g_pos) as i64;
+                            } else if g_pos >= region.end {
+                                // acceptor splice site (5' of CDS)
+                                // leave c_pos at first nucleotide of current CDS but update offset
+                                offset = -((g_pos - (region.end - 1)) as i64);
+                            } else {
+                                // in coding region
+                                c_pos += (region.end - 1) - g_pos;
+                                offset = 0;
+                            }
+                            break;
+                        } else {
+                            // since regions are sorted, g_pos is not in a region
+                            return None;
+                        }
+                    }
+                    c_pos += region.end - region.start;
+                    i += 1;
+                }
+            },
+            Strand::Unknown => {
+                // cannot classify mutation if gene strand is unknown
+                return None;
+            },
+        }
+        
+        // TODO merge this into previous code block
         // find segment i containing coding_pos
         // cds_begin and cds_end are coordinates in coding space
-        let mut cds_end = 0;
-        let mut cds_len = 0;
+        let cds_pos = c_pos as usize;
+        let mut cds_end: usize = 0;
+        let mut cds_len: usize = 0;
         let mut i = 0;
+        // number of nucleotides to remove from the current CDS until the next codon
+        let mut phase = 0;
         for seq in seqs {
             cds_len = seq.len() - (2 * padding);
             cds_end += cds_len;
-            if (cds_pos < cum) break;
+            if cds_pos < cds_end {
+                break;
+            }
             i += 1;
+            // compute phase for the next CDS
+            phase = (3 - (cds_len % 3)) % 3;
         }
-        let cds_begin = coding_end - cds_len;
-        let phase = self.regions[i].phase;
-        assert!(phase >= 0 && phase <= 2);
-        let seq = seqs[i];
+        let cds_begin = cds_end - cds_len;
+        // TODO check if calculated phase matches annotated phase
+        //let phase = self.regions[i].phase;
+        //assert!(phase >= 0 && phase <= 2);
+        let seq = &seqs[i];
         
         // compute local index of the query position within CDS i
-        let local_idx = (cds_pos - cds_begin + padding) as i64 - offset;
+        let local_idx = (cds_pos - cds_begin + padding) as i64 + offset;
         
         // Check if mutation occur outside the bounds of legal region
         
         // mutation cannot occur at (or before) first local index (0), because no 5' context is available
         // mutation cannot occur at (or after) last local index (n - 1), because no 3' context is available
-        if local_idx <= 0 || local_idx + 1 >= seq.len() {
+        if local_idx <= 0 || local_idx >= seq.len() as i64 - 1 {
             // NB  When seq.len() == 1, the mutation will not be assigned a type.
             //     This can happen if the last nuleoide of the first exon is first position of the start codon
             //     and the remaining two nucleotides of the start codon occur in the next exon.
             //     But `padding` must have been set to 0, which provides no context to classify mutation.
-            //     If `padding > 1, then seq.len() >= 3, and this edge case will handled later.
+            //     If `padding > 1, then seq.len() >= 3, and this edge case will be handled later.
             //     Therefore, it is appropriate to not classify mutation here.
             return None;
         }
@@ -214,16 +330,27 @@ impl CodingSequence {
         let nt_3p = seq[local_idx + 1];
         
         // Check whether mutation occurs at a splice site
+        let splice_site_len = splice_site_len as usize;
         
         // padding must be at least 3 for splice site mutation to be considered
         if padding >= 3 {
             // acceptor splice site is the last two nucleotides of each intron,
             // i.e. the two intronic nucleotides 5' of a CDS (but not the first CDS)
-            if (i > 0 && local_idx >= padding - 2 && local_idx < padding) ||
+            if (i > 0 && local_idx >= padding - splice_site_len && local_idx < padding) ||
             // donor splice site is the first two nucleotides of each intron,
             // i.e. the two intronic nucleotides 3' of a CDS (but not the last CDS)
-            (i < seqs.len() - 1 && local_idx >= padding + cds_len && local_idx < padding + cds_len + 2) {
-                return index(MutImpact::SpliceSite, nt_ref, nt_alt, nt_5p, nt_3p);
+            (i < seqs.len() - 1 && local_idx >= padding + cds_len && local_idx < padding + cds_len + splice_site_len) {
+                let cl = MutImpact::SpliceSite;
+                return Some( MutEffect {
+                    c_pos: cds_pos as u64,
+                    c_offset: offset as i32,
+                    nt_ref: nt_ref,
+                    nt_alt: nt_alt,
+                    aa_ref: b'.',
+                    aa_alt: b'.',
+                    impact: cl,
+                    type_index: MutOpps::index(cl, nt_ref, nt_alt, nt_5p, nt_3p),
+                } );
             }
         }
         
@@ -231,10 +358,9 @@ impl CodingSequence {
         
         let local_cds_begin = padding;
         let local_cds_end = padding + cds_len;
-        if (local_idx >= local_cds_begin && local_idx < local_cds_end) {
-        
+        if local_idx >= local_cds_begin && local_idx < local_cds_end {
             // find the codon that encompasses the query position; henceforth, query codon
-            let codon: [Nucleotide; 3];
+            let codon_ref: [Nucleotide; 3];
             // codon position of the query {0, 1, 2}
             let codon_pos: usize;
             if local_idx < phase {
@@ -243,7 +369,7 @@ impl CodingSequence {
                     // Invalid input arguments: first CDS should begin with phase = 0
                     return None;
                 }
-                let seq_prev = seqs[i-1];
+                let seq_prev = &seqs[i-1];
                 let seq_prev_cds_end = seq_prev.len() - padding;
                 let seq_prev_cds_len = seq_prev_cds_end - padding;
                 if seq_prev_cds_len < phase {
@@ -251,14 +377,15 @@ impl CodingSequence {
                     // there is not enough CDS nucleotides in the previous CDS
                     return None;
                 }
-                codon = match phase {
-                    1 => [seq_prev[seq_prev_cds_end - 2], seq_prev[seq_prev_cds_end - 1], seq[local_codon_begin]],
-                    2 => [seq_prev[seq_prev_cds_end - 1], seq[local_codon_begin], seq[local_codon_begin+1]],
+                codon_ref = match phase {
+                    1 => [seq_prev[seq_prev_cds_end - 2], seq_prev[seq_prev_cds_end - 1], seq[local_cds_begin]],
+                    2 => [seq_prev[seq_prev_cds_end - 1], seq[local_cds_begin], seq[local_cds_begin+1]],
                     _ => panic!("Invalid phase value"),
                 };
                 codon_pos = 3 - phase;
             } else {
-                codon_pos = ((local_idx - phase) % 3);
+                // query codon begins in current CDS
+                codon_pos = (local_idx - phase) % 3;
                 
                 // local index of the start of the query codon
                 let local_codon_begin = local_idx - codon_pos;
@@ -269,23 +396,23 @@ impl CodingSequence {
                         // Invalid input arguments: codon is incomplete and no more CDS available
                         return None;
                     }
-                    let seq_next = seqs[i+1];
+                    let seq_next = &seqs[i+1];
                     if local_codon_begin + 1 < local_cds_end {
                         // codon extends 1 nt into the next CDS
-                        codon = [seq[local_codon_begin], seq[local_codon_begin+1], seq_next[padding]];
+                        codon_ref = [seq[local_codon_begin], seq[local_codon_begin+1], seq_next[padding]];
                     } else {
                         // codon extends 2 nt into the next CDS
-                        codon = [seq[local_codon_begin], seq_next[padding], seq_next[padding+1]];
+                        codon_ref = [seq[local_codon_begin], seq_next[padding], seq_next[padding+1]];
                     }
                 } else {
                     // codon is within the current CDS
-                    codon = [seq[local_codon_begin], seq[local_codon_begin+1], seq[local_codon_begin+2]];
+                    codon_ref = [seq[local_codon_begin], seq[local_codon_begin+1], seq[local_codon_begin+2]];
                 }
             }
             
             let context = [nt_5p, nt_ref, nt_3p];
             
-            let aa_ref = if i == 0 && local_codon_begin == local_cds_begin {
+            let aa_ref = if i == 0 && local_idx == local_cds_begin {
                 // first codon of the first CDS is the start codon
                 // this is usually ATG but alternative start codons are possible
                 b'^'
@@ -293,8 +420,19 @@ impl CodingSequence {
                 codon_to_aa(&codon_ref)
             };
             
-            let cl = mutimpact_at_codon_pos(codon_pos, codon, aa_ref, context, nt_alt);
-            return index(cl, nt_ref, nt_alt, nt_5p, nt_3p);
+            let codon_alt = mutate_codon(&codon_ref, codon_pos, nt_alt);
+            let aa_alt = codon_to_aa(&codon_alt);
+            let cl = mutation_impact(aa_ref, aa_alt);
+            return Some( MutEffect {
+                c_pos: cds_pos as u64,
+                c_offset: offset as i32,
+                nt_ref: nt_ref,
+                nt_alt: nt_alt,
+                aa_ref: aa_ref,
+                aa_alt: aa_alt,
+                impact: cl,
+                type_index: MutOpps::index(cl, nt_ref, nt_alt, nt_5p, nt_3p),
+            } );
         }
 
         // mutation cannot be assigned a type
@@ -321,7 +459,6 @@ impl CodingSequence {
         let seqs = &self.seqs;
         let padding = self.padding;
         let nseqs = seqs.len();
-
 
         let mut x = MutOpps::new();
         let mut offset = 0;
@@ -554,7 +691,9 @@ fn count_opp_at_codon_pos(x: &mut MutOpps, pos: usize, codon: &[u8; 3], aa_ref: 
     // iterate through possible substitutions
     for &nt_alt in nucleotides.iter() {
         if nt_alt != nt_ref {
-            let cl = mutimpact_at_codon_pos(pos, codon, aa_ref, context, nt_alt);
+            let codon_alt = mutate_codon(&codon, pos, nt_alt);
+            let aa_alt = codon_to_aa(&codon_alt);
+            let cl = mutation_impact(aa_ref, aa_alt);
             let idx = MutOpps::index(cl, nt_ref, nt_alt, context[0], context[2]);
             x[idx] += 1;
         }
@@ -562,15 +701,13 @@ fn count_opp_at_codon_pos(x: &mut MutOpps, pos: usize, codon: &[u8; 3], aa_ref: 
 }
 
 /// Assign mutation impact for observed mutation at codon position.
-fn mutimpact_at_codon_pos(pos: usize, codon: &[u8; 3], aa_ref: u8, context: &[u8; 3], nt_alt: u8) {
+fn mutation_impact(aa_ref: u8, aa_alt: u8) -> MutImpact {
     if aa_ref == b'^' {
         // assume that any mutation at start codon causes start codon loss
         // this is true for ATG start codon (no degeneracy) and
         // probably true for alternative start codons as well
         MutImpact::StartOrStop
     } else {
-        let codon_alt = mutate_codon(&codon, pos, nt_alt);
-        let aa_alt = codon_to_aa(&codon_alt);
         if aa_alt == aa_ref {
             MutImpact::Synonymous 
         } else if aa_ref == b'$' || aa_alt == b'$' {
