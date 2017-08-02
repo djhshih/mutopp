@@ -113,7 +113,7 @@ fn print_translation(dna: &[Nucleotide]) {
 // Cys / C  TGT TGC
 // Gln / Q  CAA CAG
 // Glu / E  GAA GAG
-// Gly / G  GGT GGC
+// Gly / G  GGT GGC GGA GGG
 // His / H  CAT CAC
 // Ile / I  ATT ATC ATA
 // Leu / L  TTA TTG CTT CTC CTA CTG
@@ -137,7 +137,7 @@ fn codon_to_aa(codon: &Codon) -> Residue {
         b"TGT" | b"TGC" => b'C',
         b"CAA" | b"CAG" => b'Q',
         b"GAA" | b"GAG" => b'E',
-        b"GGT" | b"GGC" => b'G',
+        b"GGT" | b"GGC" | b"GGA" | b"GGG" => b'G',
         b"CAT" | b"CAC" => b'H',
         b"ATT" | b"ATC" | b"ATA" => b'I',
         b"TTA" | b"TTG" | b"CTT" | b"CTC" | b"CTA" | b"CTG" => b'L',
@@ -409,8 +409,6 @@ impl CodingSequence {
                     codon_ref = [seq[local_codon_begin], seq[local_codon_begin+1], seq[local_codon_begin+2]];
                 }
             }
-            
-            let context = [nt_5p, nt_ref, nt_3p];
             
             let aa_ref = if i == 0 && local_idx == local_cds_begin {
                 // first codon of the first CDS is the start codon
