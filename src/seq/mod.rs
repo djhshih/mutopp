@@ -22,11 +22,13 @@ pub fn complement(x: Nucleotide) -> Nucleotide {
         b'C' => b'G',
         b'G' => b'C',
         b'T' => b'A',
+        b'N' => b'N',
         b'a' => b't',
         b'c' => b'g',
         b'g' => b'c',
         b't' => b'a',
-        _ => b'X',
+        b'n' => b'n',
+        _ => b'.',
     }
 }
 
@@ -210,7 +212,8 @@ impl CodingSequence {
                     // but splice site padding do not apply to first and last CDS
                     let start_pad: u64 = if i == 0 { 0 } else { splice_site_len };
                     let end_pad: u64 = if i == regions.len() - 1 { 0 } else { splice_site_len };
-                    if g_pos < region.end + end_pad {
+                    let right = region.end + end_pad;
+                    if g_pos < right {
                         let left = if region.start > start_pad {
                             region.start - start_pad
                         } else { 0 };
@@ -223,7 +226,7 @@ impl CodingSequence {
                             } else if g_pos >= region.end {
                                 // donor splice site (3' of CDS)
                                 // set c_pos to last nucleotide of current CDS and update offset
-                                c_pos += region.end - region.start;
+                                c_pos += region.end - region.start - 1;
                                 offset = (g_pos - (region.end - 1)) as i64;
                             } else {
                                 // in coding region
@@ -233,6 +236,7 @@ impl CodingSequence {
                             break;
                         } else {
                             // since regions are sorted, g_pos is not in a region
+                            //print!("upstream_or_5utr_or_intronic, ");
                             return None;
                         }
                     }
@@ -254,17 +258,17 @@ impl CodingSequence {
                     // therefore, the start coordinate of each CDS correspond to the end of the region,
                     // and the end coordinate correspond to the start of the region
                     // futher, regions are in [region.start, region.end)
-                    let right = region.end + start_pad;
-                    if g_pos < right {
-                        let left = if region.start > end_pad {
-                            region.start - end_pad
-                        } else { 0 };
-                        if g_pos >= left {
+                    let left = if region.start > end_pad {
+                        region.start - end_pad
+                    } else { 0 };
+                    if g_pos >= left {
+                        let right = region.end + start_pad;
+                        if g_pos < right {
                             // found region
                             if g_pos < region.start {
                                 // donor splice site (3' of CDS)
                                 // set c_pos to last nucleotide of current CDS and update offset
-                                c_pos += region.end - region.start;
+                                c_pos += region.end - region.start - 1;
                                 offset = (region.start - g_pos) as i64;
                             } else if g_pos >= region.end {
                                 // acceptor splice site (5' of CDS)
@@ -278,6 +282,7 @@ impl CodingSequence {
                             break;
                         } else {
                             // since regions are sorted, g_pos is not in a region
+                            //print!("upstream_or_5utr_or_intronic, ");
                             return None;
                         }
                     }
@@ -294,9 +299,11 @@ impl CodingSequence {
         // TODO merge this into previous code block
         // find segment i containing coding_pos
         // cds_begin and cds_end are coordinates in coding space
+        let offset = offset;
         let cds_pos = c_pos as usize;
         let mut cds_end: usize = 0;
         let mut cds_len: usize = 0;
+        let mut cds_cum_len: usize = 0;
         let mut i = 0;
         // number of nucleotides to remove from the current CDS until the next codon
         let mut phase = 0;
@@ -308,16 +315,25 @@ impl CodingSequence {
             }
             i += 1;
             // compute phase for the next CDS
-            phase = (3 - (cds_len % 3)) % 3;
+            cds_cum_len += cds_len;
+            phase = (3 - (cds_cum_len % 3)) % 3;
+        }
+        //print!("i == {}, cds_pos == {}, offset == {}, phase == {}, ", i, cds_pos, offset, phase);
+        if i >= seqs.len() {
+            // query position is beyond the coding sequences
+            // variant may be in the 3' UTR or not in this transcript at all
+            //print!("3utr_or_downstream, ");
+            return None;
         }
         let cds_begin = cds_end - cds_len;
-        // TODO check if calculated phase matches annotated phase
-        //let phase = self.regions[i].phase;
+        //print!("cds_begin == {}, ", cds_begin);
+        //print!("regions[i].phase == {}, ", regions[i].phase);
         //assert!(phase >= 0 && phase <= 2);
         let seq = &seqs[i];
         
         // compute local index of the query position within CDS i
         let local_idx = (cds_pos - cds_begin + padding) as i64 + offset;
+        //print!("local_idx == {}, ", local_idx);
         
         // Check if mutation occur outside the bounds of legal region
         
@@ -330,12 +346,15 @@ impl CodingSequence {
             //     But `padding` must have been set to 0, which provides no context to classify mutation.
             //     If `padding > 1, then seq.len() >= 3, and this edge case will be handled later.
             //     Therefore, it is appropriate to not classify mutation here.
+            //print!("invalid_local_idx, ");
             return None;
         }
         
         let local_idx = local_idx as usize;
         // check that mutation reference allele matches reference sequence
         if seq[local_idx] != nt_ref {
+            // NB will not match if offset != 0
+            //print!("mismatched_ref_nt, seq[local_idx] == {}, nt_ref == {}, g_nt_ref == {}, ", seq[local_idx] as char, nt_ref as char, g_nt_ref as char);
             return None;
         }
         // previous local index bound check ensures that nt_5p and nt_3p are well defined
@@ -380,6 +399,7 @@ impl CodingSequence {
                 // query codon begins in the previous CDS
                 if i == 0 {
                     // Invalid input arguments: first CDS should begin with phase = 0
+                    //print!("first_cds_nonzero_phase, ");
                     return None;
                 }
                 let seq_prev = &seqs[i-1];
@@ -388,6 +408,7 @@ impl CodingSequence {
                 if seq_prev_cds_len < phase {
                     // Invalid input arguments:
                     // there is not enough CDS nucleotides in the previous CDS
+                    //print!("short_prev_cds, ");
                     return None;
                 }
                 codon_ref = match phase {
@@ -403,10 +424,11 @@ impl CodingSequence {
                 // local index of the start of the query codon
                 let local_codon_begin = local_idx - codon_pos;
                 
-                if local_codon_begin + 2 >= local_cds_end - 1 {
+                if local_codon_begin + 2 >= local_cds_end {
                     // codon extends into the next CDS
                     if i == seqs.len() - 1 {
                         // Invalid input arguments: codon is incomplete and no more CDS available
+                        //print!("incomplete_cds, ");
                         return None;
                     }
                     let seq_next = &seqs[i+1];
@@ -447,6 +469,7 @@ impl CodingSequence {
         }
 
         // mutation cannot be assigned a type
+        //println!("unassigned, ");
         return None;
     }
     
