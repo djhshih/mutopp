@@ -219,6 +219,17 @@ fn main() {
                 let genes = Genes::from_gff(&mut gff);
                 println!("number of valid protein-coding genes: {}", genes.len());
                 println!("{:?}", genes);
+
+                for (_, gene) in genes.map.iter() {
+                    for (tid, transcript) in gene.transcripts.iter() {
+                        let padding = 3;
+                        let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chrom, gene.strand, padding);
+                        println!(">{} gene_name={};padding={}", tid, gene.name, cds.padding);
+                        for seq in cds.seqs {
+                            seq::print_seq_padded(&seq, cds.padding);
+                        }
+                    }
+                }
                 
                 // TODO extract and output sequence for genes
             }
