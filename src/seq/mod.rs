@@ -48,6 +48,19 @@ pub fn reverse_complement(seq: &mut DnaSeq) {
     }
 }
 
+pub fn print_seq_padded(x: &[Nucleotide], padding: usize) {
+    let n = x.len();
+    if n > padding * 2 {
+        let upstream = str::from_utf8(&x[0..padding]).unwrap().to_lowercase();
+        let core = str::from_utf8(&x[padding..(n-padding)]).unwrap().to_uppercase();
+        let downstream = str::from_utf8(&x[(n-padding)..n]).unwrap().to_lowercase();
+        println!("{}{}{}", upstream, core, downstream);
+    } else {
+        let s = str::from_utf8(x).unwrap().to_lowercase();
+        println!("{}", s);
+    }
+}
+
 pub fn print_seq(x: &[Nucleotide]) {
     let s = str::from_utf8(x).expect("Found invalid DNA sequence");
     println!("{}", s);
