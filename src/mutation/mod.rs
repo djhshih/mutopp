@@ -7,12 +7,94 @@ use gene::Pos;
 use seq::{Nucleotide,Residue};
 use constants::*;
 
+#[derive(Copy, Clone)]
+pub enum SeqOntology {
+    //TranscriptAblation,
+    SpliceAcceptor,
+    SpliceDonor,
+    StopGained,
+    //Frameshift,
+    StopLost,
+    StartLost,
+    //TranscriptAmplification,
+    //InframeInsertion,
+    //InframeDeletion,
+    Missense,
+    //?ProteinAltering,
+    //?SpliceRegion,
+    //IncompleteTerminalCodon,
+    StopRetained,
+    Synonymous,
+    //?CodingSequence,
+    //MatureMiRNA,
+    FivePrimeUTR,
+    ThreePrimeUTR,
+    //NoncodingTranscriptExon,
+    Intron,
+    //NMDTranscript,
+    //NoncodingTranscript,
+    Upstream,
+    Downstream,
+    //TFBSAblation,
+    //TFBSAmplification,
+    //TFBindingSite,
+    //RegulatoryRegionAblation,
+    //RegulatoryRegionAmplification,
+    //FeatureElongation,
+    //RegulatoryRegion,
+    //FeatureTruncation,
+    Intergenic,
+}
+
 #[derive(Copy,Clone)]
 pub enum MutImpact {
     Synonymous,
     Missense,
     StartOrStop,
     SpliceSite,
+    // non-coding variants are not currently considered
+    Noncoding,
+}
+
+impl From<SeqOntology> for MutImpact {
+    fn from(x: SeqOntology) -> Self {
+        match x {
+            SpliceAcceptor => MutImpact::SpliceSite,
+            SpliceDonor => MutImpact::SpliceSite,
+            StopGained => MutImpact::StartOrStop,
+            //Frameshift,
+            StopLost => MutImpact::StartOrStop,
+            StartLost => MutImpact::StartOrStop,
+            //TranscriptAmplification,
+            //InframeInsertion,
+            //InframeDeletion,
+            Missense => MutImpact::Missense,
+            //?ProteinAltering,
+            //?SpliceRegion,
+            //IncompleteTerminalCodon,
+            StopRetained => MutImpact::Synonymous,
+            Synonymous => MutImpact::Synonymous,
+            //?CodingSequence,
+            //MatureMiRNA,
+            FivePrimeUTR => MutImpact::Noncoding,
+            ThreePrimeUTR => MutImpact::Noncoding,
+            //NoncodingTranscriptExon,
+            Intron => MutImpact::Noncoding,
+            //NMDTranscript,
+            //NoncodingTranscript,
+            Upstream => MutImpact::Noncoding,
+            Downstream => MutImpact::Noncoding,
+            //TFBSAblation,
+            //TFBSAmplification,
+            //TFBindingSite,
+            //RegulatoryRegionAblation,
+            //RegulatoryRegionAmplification,
+            //FeatureElongation,
+            //RegulatoryRegion,
+            //FeatureTruncation,
+            Intergenic => MutImpact::Noncoding,
+        }
+    }
 }
 
 impl MutImpact {
@@ -30,6 +112,7 @@ impl fmt::Display for MutImpact {
             MutImpact::Missense => "mis",
             MutImpact::StartOrStop => "sos",
             MutImpact::SpliceSite => "spl",
+            MutImpact::Noncoding => "ncd",
         };
 
         write!(f, "{}", c)
@@ -69,7 +152,7 @@ impl MutEffect {
     
     #[inline]
     pub fn aa_pos(&self) -> Pos {
-        (self.c_pos % 3) + 1
+        (self.c_pos / 3) + 1
     }
     
     pub fn cdna_change(&self) -> String {
@@ -79,15 +162,19 @@ impl MutEffect {
             },
             MutImpact::SpliceSite => {
                 let op = if self.c_offset >= 0 { '+' } else { '-' };
-                format!("c.{}{}{}{}>{}", self.cdna_pos(), op, self.c_offset, self.nt_ref as char, self.nt_alt as char)
+                format!("c.{}{}{}{}>{}", self.cdna_pos(), op, self.c_offset.abs(), self.nt_ref as char, self.nt_alt as char)
             },
+            MutImpact::Noncoding => {
+                format!("c.?")
+            }
         }
     }
     
     pub fn protein_change(&self) -> String {
         match self.impact {
             MutImpact::Synonymous => {
-                format!("p.{}{}=", self.aa_ref as char, self.aa_pos())
+                let aa_ref = if self.aa_ref == b'$' { b'*' } else { self.aa_ref };
+                format!("p.{}{}=", aa_ref as char, self.aa_pos())
             },
             MutImpact::Missense => {
                 format!("p.{}{}{}", self.aa_ref as char, self.aa_pos(), self.aa_alt as char)
@@ -109,7 +196,8 @@ impl MutEffect {
                     String::from("p.?")
                 }
             },
-            MutImpact::SpliceSite => String::from("p."),
+            MutImpact::SpliceSite => String::from("p.?"),
+            MutImpact::Noncoding => String::from("p.?"),
         }
     }
 }

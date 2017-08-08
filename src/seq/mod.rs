@@ -236,6 +236,9 @@ impl CodingSequence {
                             break;
                         } else {
                             // since regions are sorted, g_pos is not in a region
+                            //SeqOntology::FivePrimeUTR
+                            //SeqOntology::Upstream
+                            //SeqOntology::Intron
                             //print!("upstream_or_5utr_or_intronic, ");
                             return None;
                         }
@@ -282,6 +285,9 @@ impl CodingSequence {
                             break;
                         } else {
                             // since regions are sorted, g_pos is not in a region
+                            //SeqOntology::FivePrimeUTR
+                            //SeqOntology::Upstream
+                            //SeqOntology::Intron
                             //print!("upstream_or_5utr_or_intronic, ");
                             return None;
                         }
@@ -322,6 +328,8 @@ impl CodingSequence {
         if i >= seqs.len() {
             // query position is beyond the coding sequences
             // variant may be in the 3' UTR or not in this transcript at all
+            //SeqOntology::ThreePrimeUTR
+            //SeqOntology::Downstream
             //print!("3utr_or_downstream, ");
             return None;
         }
@@ -372,6 +380,8 @@ impl CodingSequence {
             // donor splice site is the first two nucleotides of each intron,
             // i.e. the two intronic nucleotides 3' of a CDS (but not the last CDS)
             (i < seqs.len() - 1 && local_idx >= padding + cds_len && local_idx < padding + cds_len + splice_site_len) {
+                //SeqOntology::SpliceAcceptor
+                //SeqOntology::SpliceDonor
                 let cl = MutImpact::SpliceSite;
                 return Some( MutEffect {
                     c_pos: cds_pos as u64,
@@ -455,6 +465,11 @@ impl CodingSequence {
             
             let codon_alt = mutate_codon(&codon_ref, codon_pos, nt_alt);
             let aa_alt = codon_to_aa(&codon_alt);
+            //SeqOntology::Missense
+            //SeqOntology::StopGain
+            //SeqOntology::StopLost
+            //SeqOntology::Synonymous
+            //SeqOntology::StopRetained
             let cl = mutation_impact(aa_ref, aa_alt);
             return Some( MutEffect {
                 c_pos: cds_pos as u64,
