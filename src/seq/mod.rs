@@ -1243,9 +1243,9 @@ mod test {
             assert_eq!(b"GTTCGATAC".to_vec(), x);
         }
         {
-            let mut x = b"TTAACTTXTTATGC".to_vec();
+            let mut x = b"TTAACTTNTTATGC".to_vec();
             reverse_complement(&mut x);
-            assert_eq!(b"GCATAAXAAGTTAA".to_vec(), x);
+            assert_eq!(b"GCATAANAAGTTAA".to_vec(), x);
         }
     }
 
