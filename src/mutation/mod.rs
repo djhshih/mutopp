@@ -46,6 +46,50 @@ pub enum SeqOntology {
     Intergenic,
 }
 
+impl fmt::Display for SeqOntology {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let c = match *self {
+            //SeqOntology::TranscriptAblation => "transcript_ablation",
+            SeqOntology::SpliceAcceptor => "splice_acceptor_variant",
+            SeqOntology::SpliceDonor => "splice_donor_variant",
+            SeqOntology::StopGained => "stop_gained",
+            //SeqOntology::Frameshift => "frameshift_variant",
+            SeqOntology::StopLost => "stop_lost",
+            SeqOntology::StartLost => "start_lost",
+            //SeqOntology::TranscriptAmplification => "transcript_amplification",
+            //SeqOntology::InframeInsertion => "inframe_insertion",
+            //SeqOntology::InframeDeletion => "inframe_deletion",
+            SeqOntology::Missense => "missense_variant",
+            //SeqOntology::?ProteinAltering => "protein_altering_variant",
+            //SeqOntology::?SpliceRegion => "splice_region_variant",
+            //SeqOntology::IncompleteTerminalCodon => "incomplete_terminal_codon_variant",
+            SeqOntology::StopRetained => "stop_retained_variant",
+            SeqOntology::Synonymous => "synonymous_variant",
+            //SeqOntology::?CodingSequence => "coding_sequence_variant",
+            //SeqOntology::MatureMiRNA => "mature_mirRNA_variant",
+            SeqOntology::FivePrimeUTR => "5_prime_UTR_variant",
+            SeqOntology::ThreePrimeUTR => "3_prime_UTR_variant",
+            //SeqOntology::NoncodingTranscriptExon => "non_coding_transcript_exon_variant",
+            SeqOntology::Intron => "intron_variant",
+            //SeqOntology::NMDTranscript => "NMD_transcript_variant",
+            //SeqOntology::NoncodingTranscript => "non_coding_transcript_exon_variant",
+            SeqOntology::Upstream => "upstream_gene_variant",
+            SeqOntology::Downstream => "downstream_gene_variant",
+            //SeqOntology::TFBSAblation => "TFBS_ablation",
+            //SeqOntology::TFBSAmplification => "TFBS_amplification",
+            //SeqOntology::TFBindingSite => "TF_binding_site_variant",
+            //SeqOntology::RegulatoryRegionAblation => "regulatory_region_ablation",
+            //SeqOntology::RegulatoryRegionAmplification => "regulatory_region_amplification",
+            //SeqOntology::FeatureElongation => "feature_elongation",
+            //SeqOntology::RegulatoryRegion => "regulatory_region_variant",
+            //SeqOntology::FeatureTruncation => "feature_truncation",
+            SeqOntology::Intergenic => "intergenic_variant",
+        };
+
+        write!(f, "{}", c)
+    }
+}
+
 #[derive(Copy,Clone)]
 pub enum MutImpact {
     Synonymous,
