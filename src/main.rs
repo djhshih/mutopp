@@ -48,6 +48,10 @@ fn main() {
                 .required(true)))
         .subcommand(SubCommand::with_name("count")
             .about("count mutation types in observed mutations")
+            .arg(Arg::with_name("aggregate")
+                .short("g")
+                .long("aggregate")
+                .help("aggregate mutations from different samples together"))
             .arg(Arg::with_name("fasta")
                 .help("input indexed .fasta file (index .fasta.fai file must exist)")
                 .required(true))
@@ -55,7 +59,7 @@ fn main() {
                 .help("input gene annotation .gff3 file")
                 .required(true))
             .arg(Arg::with_name("snv")
-                .help("input aggregated mutations tab-separated file (fields: chrom pos ref alt [sample])")
+                .help("input mutations as tab-separated file (fields: chrom pos ref alt [sample])")
                 .required(true))
             .arg(Arg::with_name("output")
                 .help("output file")
@@ -69,7 +73,7 @@ fn main() {
                 .help("input gene annotation .gff3 file")
                 .required(true))
             .arg(Arg::with_name("snv")
-                .help("input aggregated mutations tab-separated file (fields: chrom pos ref alt [sample])")
+                .help("input mutations as tab-separated file (fields: chrom pos ref alt [sample])")
                 .required(true))
             .arg(Arg::with_name("output")
                 .help("output file")
@@ -130,6 +134,7 @@ fn main() {
             let ref gff_fn = m.value_of("gff").unwrap();
             let ref snv_fn = m.value_of("snv").unwrap();
             let ref out_fn = m.value_of("output").unwrap();
+            let aggregate = m.is_present("aggregate");
             
             let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
                 Err(why) => panic!("{:?}", why),
@@ -157,7 +162,7 @@ fn main() {
                 Ok(file) => file,
             };
 
-            if let Err(why) = genes.write_counts(&mut snv, &mut ifasta, &mut out_file) {
+            if let Err(why) = genes.write_counts(&mut snv, &mut ifasta, &mut out_file, aggregate) {
                 panic!("Could not write mutation type counts to file: {}", why);
             }
         },
@@ -449,7 +454,7 @@ impl Genes {
         Ok(())
     }
     
-    pub fn write_counts(&self, mut snv: &mut SnvReader, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File) -> io::Result<()> {
+    pub fn write_counts(&self, mut snv: &mut SnvReader, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File, aggregate: bool) -> io::Result<()> {
         use std::io::Write;
         
         let sep = "\t";
@@ -462,7 +467,8 @@ impl Genes {
             let record = s.ok().expect("Error reading SNV record");
             print!("{} ... ", record);
             
-            let sample_muts_map = muts_map.entry(record.sample_id).or_insert(LinkedHashMap::new());
+            let sample_id = if aggregate { 0 } else { record.sample_id };
+            let sample_muts_map = muts_map.entry(sample_id).or_insert(LinkedHashMap::new());
             let mut in_coding = false;
             let overlap = self.find_overlap(&record.chrom, record.pos, record.pos + 1);
             for gid in overlap.iter() {
