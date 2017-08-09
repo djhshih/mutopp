@@ -111,7 +111,6 @@ fn main() {
 
             let genes = Genes::from_gff(&mut gff);
             println!("number of valid protein-coding genes: {}", genes.len());
-            println!("{:?}", genes);
             
             // Open a file in write-only mode, returns `io::Result<fs::File>`
             let mut out_file = match fs::File::create(&out_fn) {
@@ -149,7 +148,6 @@ fn main() {
 
             let genes = Genes::from_gff(&mut gff);
             println!("number of valid protein-coding genes: {}", genes.len());
-            println!("{:?}", genes);
             
             // Open a file in write-only mode, returns `io::Result<fs::File>`
             let mut out_file = match fs::File::create(&out_fn) {
@@ -187,7 +185,6 @@ fn main() {
 
             let genes = Genes::from_gff(&mut gff);
             println!("number of valid protein-coding genes: {}", genes.len());
-            println!("{:?}", genes);
             
             // Open a file in write-only mode, returns `io::Result<fs::File>`
             let mut out_file = match fs::File::create(&out_fn) {
@@ -217,21 +214,22 @@ fn main() {
                 };
 
                 let genes = Genes::from_gff(&mut gff);
-                println!("number of valid protein-coding genes: {}", genes.len());
-                println!("{:?}", genes);
+                println!("; number of valid protein-coding genes: {}", genes.len());
+                println!("; {:?}", genes.map);
 
                 for (_, gene) in genes.map.iter() {
                     for (tid, transcript) in gene.transcripts.iter() {
                         let padding = 3;
                         let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chrom, gene.strand, padding);
-                        println!(">{} gene_name={};padding={}", tid, gene.name, cds.padding);
+                        let lens: Vec<usize> = cds.seqs.iter().map(|x| x.len() - 2 * padding).collect();
+                        let len_total: usize = lens.iter().sum();
+                        let len_str: Vec<String> = lens.iter().map(|x| x.to_string()).collect();
+                        println!(">{} gene_name={};lengths={};total={};padding={};", tid, gene.name, len_str.join(","), len_total, cds.padding);
                         for seq in cds.seqs {
                             seq::print_seq_padded(&seq, cds.padding);
                         }
                     }
                 }
-                
-                // TODO extract and output sequence for genes
             }
 
             if let Some(coord) = m.value_of("coord") {
