@@ -10,6 +10,7 @@ use std::fs;
 
 use bio::io::fasta;
 use bio::io::gff;
+use bio::io::bed;
 
 use bio::data_structures::interval_tree::{IntervalTree};
 
@@ -35,8 +36,8 @@ fn main() {
         .version(crate_version!())
         .author("David J. H. Shih <djh.shih@gmail.com>")
         .about("Mutation opportunity")
-        .subcommand(SubCommand::with_name("enumerate")
-            .about("enumerate all mutation opportunities")
+        .subcommand(SubCommand::with_name("enum-genes")
+            .about("enumerate all mutation opportunities in genes")
             .arg(Arg::with_name("fasta")
                 .help("input indexed .fasta file (index .fasta.fai file must exist)")
                 .required(true))
@@ -46,7 +47,7 @@ fn main() {
             .arg(Arg::with_name("output")
                 .help("output file")
                 .required(true)))
-        .subcommand(SubCommand::with_name("count")
+        .subcommand(SubCommand::with_name("count-gene-muts")
             .about("count mutation types in observed mutations")
             .arg(Arg::with_name("aggregate")
                 .short("g")
@@ -64,7 +65,7 @@ fn main() {
             .arg(Arg::with_name("output")
                 .help("output file")
                 .required(true)))
-        .subcommand(SubCommand::with_name("annotate")
+        .subcommand(SubCommand::with_name("annot-gene-muts")
             .about("annotate observed mutations")
             .arg(Arg::with_name("fasta")
                 .help("input indexed .fasta file (index .fasta.fai file must exist)")
@@ -78,7 +79,18 @@ fn main() {
             .arg(Arg::with_name("output")
                 .help("output file")
                 .required(true)))
-        .subcommand(SubCommand::with_name("extract")
+        .subcommand(SubCommand::with_name("enum-regions")
+            .about("enumerate all mutation opportunities")
+            .arg(Arg::with_name("fasta")
+                .help("input indexed .fasta file (index .fasta.fai file must exist)")
+                .required(true))
+            .arg(Arg::with_name("bed")
+                .help("input regions .bed file")
+                .required(true))
+            .arg(Arg::with_name("output")
+                .help("output file")
+                .required(true)))
+        .subcommand(SubCommand::with_name("extract-fasta")
             .about("extract sequence from .fasta file")
             .arg(Arg::with_name("fasta")
                 .help("input indexed .fasta file (index .fasta.fai file must exist)")
@@ -94,7 +106,7 @@ fn main() {
                 .help("genes to extract")
                 .conflicts_with("coord")
                 .takes_value(true)))
-        .subcommand(SubCommand::with_name("gfftobed")
+        .subcommand(SubCommand::with_name("gff-to-bed")
             .about("convert transcript information from GFF3 to BED format")
             .arg(Arg::with_name("gff")
                 .help("input gene annotation .gff3 file")
@@ -105,8 +117,8 @@ fn main() {
         .get_matches();
 
     match matches.subcommand_name() {
-        Some("enumerate") => {
-            let m = matches.subcommand_matches("enumerate").unwrap();
+        Some("enum-genes") => {
+            let m = matches.subcommand_matches("enum-genes").unwrap();
             let ref fasta_fn = m.value_of("fasta").unwrap();
             let ref gff_fn = m.value_of("gff").unwrap();
             let ref out_fn = m.value_of("output").unwrap();
@@ -136,8 +148,8 @@ fn main() {
                 panic!("Could not write mutation opportunities to file: {}", why);
             }
         },
-        Some("count") => {
-            let m = matches.subcommand_matches("count").unwrap();
+        Some("count-gene-muts") => {
+            let m = matches.subcommand_matches("count-gene-muts").unwrap();
             let ref fasta_fn = m.value_of("fasta").unwrap();
             let ref gff_fn = m.value_of("gff").unwrap();
             let ref snv_fn = m.value_of("snv").unwrap();
@@ -174,8 +186,8 @@ fn main() {
                 panic!("Could not write mutation type counts to file: {}", why);
             }
         },
-        Some("annotate") => {
-            let m = matches.subcommand_matches("annotate").unwrap();
+        Some("annot-gene-muts") => {
+            let m = matches.subcommand_matches("annot-gene-muts").unwrap();
             let ref fasta_fn = m.value_of("fasta").unwrap();
             let ref gff_fn = m.value_of("gff").unwrap();
             let ref snv_fn = m.value_of("snv").unwrap();
@@ -211,8 +223,38 @@ fn main() {
                 panic!("Could not write mutation annotations to file: {}", why);
             }
         },
-        Some("extract") => {
-            let m = matches.subcommand_matches("extract").unwrap();
+        Some("enum-genes") => {
+            let m = matches.subcommand_matches("enum-genes").unwrap();
+            let ref fasta_fn = m.value_of("fasta").unwrap();
+            let ref bed_fn = m.value_of("bed").unwrap();
+            let ref out_fn = m.value_of("output").unwrap();
+            
+            let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
+                Err(why) => panic!("{:?}", why),
+                Ok(reader) => reader,
+            };
+
+            let mut bed = match bed::Reader::from_file(bed_fn) {
+                Err(why) => panic!("{:?}", why),
+                Ok(reader) => reader,
+            };
+
+            // Open a file in write-only mode, returns `io::Result<fs::File>`
+            let mut out_file = match fs::File::create(&out_fn) {
+                Err(why) => panic!("Could not create {}: {:?}",
+                                out_fn,
+                                why),
+                Ok(file) => file,
+            };
+            /*
+            let regions = ();
+            if let Err(why) = regions.write_opps(&mut ifasta, &mut out_file) {
+                panic!("Could not write mutation opportunities to file: {}", why);
+            }
+            */
+        },
+        Some("extract-fasta") => {
+            let m = matches.subcommand_matches("extract-fasta").unwrap();
             let ref fasta_fn = m.value_of("fasta").unwrap();
             
             let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
@@ -260,8 +302,8 @@ fn main() {
             }
             
         },
-        Some("gfftobed") => {
-            let m = matches.subcommand_matches("gfftobed").unwrap();
+        Some("gff-to-bed") => {
+            let m = matches.subcommand_matches("gff-to-bed").unwrap();
             let gff_fn = m.value_of("gff").unwrap();
 						let out_fn = m.value_of("bed").unwrap();
 
