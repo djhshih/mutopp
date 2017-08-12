@@ -94,6 +94,14 @@ fn main() {
                 .help("genes to extract")
                 .conflicts_with("coord")
                 .takes_value(true)))
+        .subcommand(SubCommand::with_name("gfftobed")
+            .about("convert transcript information from GFF3 to BED format")
+            .arg(Arg::with_name("gff")
+                .help("input gene annotation .gff3 file")
+                .required(true))
+            .arg(Arg::with_name("bed")
+                .help("output gene annotation .bed file")
+                .required(true)))
         .get_matches();
 
     match matches.subcommand_name() {
@@ -251,6 +259,31 @@ fn main() {
                 }
             }
             
+        },
+        Some("gfftobed") => {
+            let m = matches.subcommand_matches("gfftobed").unwrap();
+            let gff_fn = m.value_of("gff").unwrap();
+						let out_fn = m.value_of("bed").unwrap();
+
+						let mut gff = match gff::Reader::from_file(gff_fn, gff::GffType::GFF3) {
+								Err(why) => panic!("{:?}", why),
+								Ok(reader) => reader,
+						};
+
+						let genes = Genes::from_gff(&mut gff);
+						println!("number of valid protein-coding genes: {}", genes.len());
+
+						// Open a file in write-only mode, returns `io::Result<fs::File>`
+						let mut out_file = match fs::File::create(&out_fn) {
+								Err(why) => panic!("Could not create {}: {:?}",
+																out_fn,
+																why),
+								Ok(file) => file,
+						};
+
+						if let Err(why) = genes.write_bed(&mut out_file) {
+								panic!("Could not write gene annotations to BED file: {}", why);
+						}
         },
         None => println!("Type `mutopp help` for help."),
         _ => panic!("Invalid subcommand"),
@@ -550,6 +583,41 @@ impl Genes {
         }
         
         Ok(())
+    }
+
+    /// Write annotation to bed file.
+    pub fn write_bed(&self, out: &mut fs::File) -> io::Result<()> {
+        use std::io::Write;
+        
+        let sep = "\t";
+
+        // chrom chromStart chromEnd name score strand
+        // NB blocks are *not* used
+				// coordinates are 0-based, half-open
+
+				let score = "0";
+        for (_, gene) in self.map.iter() {
+						let name = format!("gene:{}", gene.name);
+						let strand = match gene.strand {
+								Strand::Forward => "+",
+								Strand::Reverse => "-",
+								_ => ".",
+						};
+            let line = vec![gene.chrom.to_owned(), gene.start.to_string(), gene.end.to_string(), name, score.to_owned(), strand.to_owned()].join(sep);
+            try!(writeln!(out, "{}", line));
+            for (tid, transcript) in gene.transcripts.iter() { 
+								let name = format!("transcript:{}", tid);
+                let line = vec![gene.chrom.to_owned(), transcript.start.to_string(), transcript.end.to_string(), name, score.to_owned(), strand.to_owned()].join(sep);
+                try!(writeln!(out, "{}", line));
+                for cds in transcript.coding_regions.iter() {
+										let cds_name = format!("CDS:{}", tid);
+										let line = vec![gene.chrom.to_owned(), cds.start.to_string(), cds.end.to_string(), cds_name, score.to_owned(), strand.to_owned()].join(sep);
+										try!(writeln!(out, "{}", line));
+                }
+            }
+        }
+
+      Ok(())
     }
     
 }
