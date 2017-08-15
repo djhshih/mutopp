@@ -10,6 +10,7 @@ use std::fs;
 
 use bio::io::fasta;
 use bio::io::gff;
+use bio::io::bed;
 
 use bio::data_structures::interval_tree::{IntervalTree};
 
@@ -19,14 +20,15 @@ use linked_hash_map::LinkedHashMap;
 use clap::{Arg, App, SubCommand};
 
 use mutopp::gene::{Pos, Gene,Transcript,Region,Strand};
-use mutopp::seq::{self,CodingSequence};
-use mutopp::mutation::MutOpps;
+use mutopp::seq::{self,Nucleotide};
+use mutopp::mutation;
 use mutopp::utils;
 use mutopp::io::snv;
 
 type FastaIndexedReader = fasta::IndexedReader<fs::File>;
 type GffReader = gff::Reader<fs::File>;
 type SnvReader = snv::Reader<fs::File>;
+type BedReader = bed::Reader<fs::File>;
 
 const CDS_PADDING: usize = 3;
 
@@ -292,9 +294,9 @@ fn main() {
 
 /// Assume that CDS are in order for features on the plus and the minus strand.
 /// For features on the minus strand specifically, the positions of the CDS is in descending order
-fn get_transcript_cds_from_fasta(reader: &mut FastaIndexedReader, transcript: &Transcript, chrom: &str, strand: Strand, padding: usize) -> CodingSequence {
+fn get_transcript_cds_from_fasta(reader: &mut FastaIndexedReader, transcript: &Transcript, chrom: &str, strand: Strand, padding: usize) -> seq::coding::Sequence {
     let n = transcript.coding_regions.len();
-    let mut seqs: seq::DnaSeqs = vec![Vec::new(); n];
+    let mut seqs: Vec<seq::DnaSeq> = vec![Vec::new(); n];
     for (i, region) in transcript.coding_regions.iter().enumerate() {
         if let Err(why) = reader.read(chrom, region.start - padding as u64, region.end + padding as u64, &mut seqs[i]) {
             panic!("{:?}", why);
@@ -304,7 +306,7 @@ fn get_transcript_cds_from_fasta(reader: &mut FastaIndexedReader, transcript: &T
         }
     }
     
-    CodingSequence { seqs: seqs, padding: padding }
+    seq::coding::Sequence { seqs: seqs, padding: padding }
 }
 
 fn attribute_filter(attrs: &MultiMap<String, String>, key: &str, target: &str) -> bool {
@@ -454,7 +456,7 @@ impl Genes {
         let sep = "\t";
 
         let mut header = vec![String::from("transcript_id"), String::from("gene_symbol")];
-        header.extend(MutOpps::types());
+        header.extend(mutation::coding::MutOpps::types());
 
         try!(writeln!(out, "{}", header.join(sep)));
         
@@ -493,7 +495,7 @@ impl Genes {
         let sep = "\t";
         
         // mutation type counts map -- key1: sample_id; key2: transcript_id
-        let mut muts_map: LinkedHashMap<u32, LinkedHashMap<String, MutOpps>> = LinkedHashMap::new();
+        let mut muts_map: LinkedHashMap<u32, LinkedHashMap<String, mutation::coding::MutOpps>> = LinkedHashMap::new();
         
         // count mutation types
         for s in snv.records() {
@@ -509,7 +511,7 @@ impl Genes {
                 for (tid, transcript) in gene.transcripts.iter() {
                     let cds = get_transcript_cds_from_fasta(&mut ifasta, transcript, &gene.chrom, gene.strand, CDS_PADDING);
                     if let Some(effect) = cds.assign_mutation(gene, transcript, record.pos, record.nt_ref, record.nt_alt) {
-                        let t_muts = sample_muts_map.entry(tid.clone()).or_insert(MutOpps::new());
+                        let t_muts = sample_muts_map.entry(tid.clone()).or_insert(mutation::coding::MutOpps::new());
                         t_muts[effect.type_index] += 1;
                         in_coding = true;
                     }
@@ -525,7 +527,7 @@ impl Genes {
         
         // write header
         let mut header = vec![String::from("sample_id"), String::from("transcript_id")];
-        header.extend(MutOpps::types());
+        header.extend(mutation::coding::MutOpps::types());
         try!(writeln!(out, "{}", header.join(sep)));
         
         // write opportunities to file
@@ -595,7 +597,7 @@ impl Genes {
         // NB blocks are *not* used
 				// coordinates are 0-based, half-open
 
-				let score = "0";
+		let score = "0";
         for (_, gene) in self.map.iter() {
 						let name = format!("gene:{}", gene.name);
 						let strand = match gene.strand {
@@ -620,4 +622,293 @@ impl Genes {
       Ok(())
     }
     
+}
+
+#[derive(Debug,Clone)]
+struct Snv {
+    /// genomic position
+    pos: u64,
+    /// reference allele
+    nt_ref: Nucleotide,
+    /// alternative allele
+    nt_alt: Nucleotide,
+    /// sample ID
+    sample_id: u32,
+}
+
+/// Collection of single nucleotide variants grouped by chromosome
+#[derive(Debug)]
+struct GroupedSnvs {
+    /// map from chromosome name to sorted vector of snvs
+    inner: LinkedHashMap<String, Snvs>,
+}
+
+impl GroupedSnvs {
+    fn new() -> Self {
+        let nchroms: usize = 25;
+        GroupedSnvs {
+            inner: LinkedHashMap::with_capacity(nchroms),
+        }
+    }
+
+    fn from_snv(reader: &mut SnvReader) -> Self {
+        let mut gsnvs = GroupedSnvs::new();
+            
+        for r in reader.records() {
+            let record = r.ok().expect("Error reading SNV record");
+            let snvs = gsnvs.inner.entry(record.chrom.to_owned()).or_insert(Snvs::new());
+            snvs.push(Snv {
+                pos: record.pos,
+                nt_ref: record.nt_ref,
+                nt_alt: record.nt_alt,
+                sample_id: record.sample_id,
+            });
+        }
+        
+        // sort regions within each chromosome by position
+        let sorted = gsnvs.inner.into_iter()
+            .map(|(chrom, mut snvs)| {
+                snvs.sort();
+                (chrom, snvs)
+            }).collect();
+
+        GroupedSnvs { inner: sorted }
+    }
+}
+
+#[derive(Debug)]
+struct Snvs {
+    inner: Vec<Snv>,
+}
+
+impl Snvs {
+    /// Construct a new, empty SNV collection.
+    fn new() -> Self {
+        Snvs { inner: Vec::new() }
+    }
+
+    /// Append an SNV to the back of the collection.
+    fn push(&mut self, snv: Snv) {
+        self.inner.push(snv);
+    }
+
+    /// Sort SNVs by position.
+    fn sort(&mut self) {
+        self.inner.sort_by_key(|x| x.pos);
+    }
+
+    /// Group SNVs by region.
+    /// Return a map from region to Snvs
+    fn group_by_regions(&self, regions: &Vec<Region>) -> LinkedHashMap<std::ops::Range<Pos>, Snvs> {
+        let mut map = LinkedHashMap::new();
+
+        let opt_indices = self.find_containing_regions(regions);
+        let mut sit = self.inner.iter();
+        for &x in opt_indices.iter() {
+            if let Some(snv) = sit.next() {
+                if let Some(idx) = x {
+                    let snvs = map.entry(regions[idx].start .. regions[idx].end).or_insert(Snvs::new());
+                    snvs.push(snv.clone()); 
+                }
+            } else {
+                // ran out of SNVs
+                break;
+            }
+        }
+
+        map
+    }
+
+    /// For each snv, find the region index that contains it, if any.
+    /// snvs are sorted by position.
+    /// regions are sorted by start position.
+    fn find_containing_regions(&self, regions: &Vec<Region>) -> Vec<Option<usize>> {
+        let mut sit = self.inner.iter();
+        // since SNVs and regions are both sorted, we can shrink the region slice during the search
+        let mut slice = &regions[0..];
+        let mut result = Vec::with_capacity(self.inner.len());
+        loop {
+            match sit.next() {
+                Some(snv) => {
+                    // MAYBE check if current SNV matches previous SNV => skip work
+                    // check if first region contains the SNV
+                    let region = &slice[0];
+                    if snv.pos >= region.start && snv.pos < region.end {
+                        result.push(Some(0));
+                    } else {
+                        // find region containing SNV among remainig regions, if any
+                        // binary search will find last of region s.t. query position <= region start
+                        let option: Option<usize> = match slice[1..].binary_search_by_key(&snv.pos, |r| r.start) {
+                            Err(idx) => {
+                                if idx > 0 {
+                                    // regions[idx-1].start < snv.pos < regions[idx].start    
+                                    let prev_idx = idx - 1;
+                                    let region = &slice[prev_idx];
+                                    if idx > 1 {
+                                        slice = &slice[prev_idx..];
+                                    }
+                                    if snv.pos < region.end {
+                                        // region contains pos
+                                        Some(prev_idx)
+                                    } else {
+                                        // since regions are not overlapping
+                                        // no region contains pos
+                                        None
+                                    }
+                                } else {
+                                    // else pos < regions[0].start
+                                    None
+                                }
+                            },
+                            Ok(idx) => {
+                                // pos == regions[idx].start    
+                                // region contains pos
+                                if idx > 0 {
+                                    slice = &slice[idx..];
+                                }
+                                Some(idx)
+                            },
+                        };
+                        result.push(option);
+                    }
+                },
+                None => break,
+            }
+        }
+        result
+    }
+}
+
+/// Collection of non-overlapping genomic regions grouped by chromosome
+#[derive(Debug)]
+struct Regions {
+    /// map from chromosome name to sorted vector of regions
+    inner: LinkedHashMap<String, Vec<Region>>,
+}
+
+impl Regions {
+    pub fn new() -> Self {
+        let nchroms: usize = 25;
+        Regions {
+            inner: LinkedHashMap::with_capacity(nchroms),
+        }
+    }
+
+    pub fn from_bed(reader: &mut BedReader) -> Self {
+        let mut regions = Regions::new();
+
+        for r in reader.records() {
+            let record = r.expect("Error reading BED record");
+            let vec = regions.inner.entry(record.chrom().to_owned()).or_insert(Vec::new());
+            // BED file uses 0-based, half-open coordindates: no adjustment required
+            vec.push(Region { phase: 0, start: record.start(), end: record.end() } );
+        }
+
+        // sort regions within each chromosome by start position
+        let sorted = regions.inner.into_iter()
+            .map(|(chrom, mut rs)| {
+                rs.sort_by_key(|r| r.start);
+                (chrom, rs)
+            })
+            .collect();
+
+        Regions { inner: sorted }
+    }
+
+    pub fn write_counts(&self, snv: &mut SnvReader, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File, aggregate: bool) -> io::Result<()> {
+        use std::io::Write;
+        
+        let sep = "\t";
+        
+        // mutation channel counts map -- key: sample_id
+        let mut muts_map: LinkedHashMap<u32, mutation::genomic::MutOpps> = LinkedHashMap::new();
+        
+        // both snvs and regions are sorted within each chromosome
+        let snvs_map = GroupedSnvs::from_snv(snv);
+        let regions_map = &self.inner;
+
+        // get all regions on each chromosome
+        for (chrom, snvs) in snvs_map.inner.iter() {
+            // get all regions on the same chromosome
+            if let Some(regions) = regions_map.get(chrom) {
+                // group snvs by region and iterate through regions
+                let regioned_snvs = snvs.group_by_regions(regions);
+                for (region, snvs) in regioned_snvs.iter() {
+                    // get region sequence once for all snvs within region
+                    let mut seq: seq::DnaSeq = Vec::new();
+                    if let Err(why) = ifasta.read(chrom, region.start, region.end, &mut seq) {
+                        panic!("{:?}", why);
+                    }
+                    let seq = seq::genomic::Sequence{ inner: seq };
+
+                    // count all mutations in region
+                    for snv in snvs.inner.iter() {
+                        let sample_id = if aggregate { 0 } else { snv.sample_id };
+                        let sample_muts = muts_map.entry(sample_id).or_insert(mutation::genomic::MutOpps::new());
+                        let region = Region { phase: 0, start: region.start, end: region.end };
+                        match seq.assign_channels(&region, snv.pos, snv.nt_ref, snv.nt_alt) {
+                            None => {
+                                println!("{}:g.{}{}>{} is not in any region", chrom, snv.pos, snv.nt_ref, snv.nt_alt);
+                            },
+                            Some(idx) => {
+                                sample_muts[idx] += 1;
+                            },
+                        }
+                    }
+                }
+            }
+            println!("{} ... done", chrom);
+        }
+        
+        // write header
+        let mut header = vec![String::from("sample_id")];
+        header.extend(mutation::genomic::MutOpps::channels());
+        try!(writeln!(out, "{}", header.join(sep)));
+
+        // write opportunities to file
+        for (sid, muts) in muts_map.iter() {
+            let mut line = sid.to_string();
+            for x in muts.iter() {
+                line.push_str(sep);
+                line.push_str(&x.to_string());
+            }
+            try!(writeln!(out, "{}", line));
+        }
+        
+        Ok(())
+    }
+
+    pub fn write_opps(&self, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File) -> io::Result<()> {
+        use std::io::Write;
+
+        let sep = "\t";
+
+        let header = mutation::genomic::MutOpps::channels();
+        try!(writeln!(out, "{}", header.join(sep)));
+
+        // accmulate mutation opportunities over all regions on all chromosomes
+        let mut opp = mutation::genomic::MutOpps::new();
+        for (chrom, regions) in self.inner.iter() {
+            print!("{} ... ", chrom);
+            for region in regions.iter() {
+                let mut seq: seq::DnaSeq = Vec::new();
+                if let Err(why) = ifasta.read(chrom, region.start, region.end, &mut seq) {
+                    panic!("{:?}", why);
+                }
+                let seq = seq::genomic::Sequence{ inner: seq };
+                seq.accumulate_opp(&mut opp);
+            }
+            println!("done");
+        }
+
+        // write results to file
+        let mut line = String::new();
+        for x in opp.iter() {
+            line.push_str(sep);
+            line.push_str(&x.to_string());
+        }
+        try!(writeln!(out, "{}", line));
+
+        Ok(())
+    }
 }
