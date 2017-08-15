@@ -49,7 +49,7 @@ fn main() {
                 .help("output file")
                 .required(true)))
         .subcommand(SubCommand::with_name("count-gene-muts")
-            .about("count mutation types in observed mutations")
+            .about("count mutation types of observed mutations")
             .arg(Arg::with_name("aggregate")
                 .short("g")
                 .long("aggregate")
@@ -87,6 +87,24 @@ fn main() {
                 .required(true))
             .arg(Arg::with_name("bed")
                 .help("input regions .bed file")
+                .required(true))
+            .arg(Arg::with_name("output")
+                .help("output file")
+                .required(true)))
+        .subcommand(SubCommand::with_name("count-region-muts")
+            .about("count mutation channels of observed mutations")
+            .arg(Arg::with_name("aggregate")
+                .short("g")
+                .long("aggregate")
+                .help("aggregate mutations from different samples together"))
+            .arg(Arg::with_name("fasta")
+                .help("input indexed .fasta file (index .fasta.fai file must exist)")
+                .required(true))
+            .arg(Arg::with_name("bed")
+                .help("input regions .bed file")
+                .required(true))
+            .arg(Arg::with_name("snv")
+                .help("input mutations as tab-separated file (fields: chrom pos ref alt [sample])")
                 .required(true))
             .arg(Arg::with_name("output")
                 .help("output file")
@@ -224,8 +242,8 @@ fn main() {
                 panic!("Could not write mutation annotations to file: {}", why);
             }
         },
-        Some("enum-genes") => {
-            let m = matches.subcommand_matches("enum-genes").unwrap();
+        Some("enum-regions") => {
+            let m = matches.subcommand_matches("enum-regions").unwrap();
             let ref fasta_fn = m.value_of("fasta").unwrap();
             let ref bed_fn = m.value_of("bed").unwrap();
             let ref out_fn = m.value_of("output").unwrap();
@@ -240,6 +258,8 @@ fn main() {
                 Ok(reader) => reader,
             };
 
+            let regions = Regions::from_bed(&mut bed);
+
             // Open a file in write-only mode, returns `io::Result<fs::File>`
             let mut out_file = match fs::File::create(&out_fn) {
                 Err(why) => panic!("Could not create {}: {:?}",
@@ -247,12 +267,47 @@ fn main() {
                                 why),
                 Ok(file) => file,
             };
-            /*
-            let regions = ();
+
             if let Err(why) = regions.write_opps(&mut ifasta, &mut out_file) {
                 panic!("Could not write mutation opportunities to file: {}", why);
             }
-            */
+        },
+        Some("count-region-muts") => {
+            let m = matches.subcommand_matches("count-region-muts").unwrap();
+            let ref fasta_fn = m.value_of("fasta").unwrap();
+            let ref bed_fn = m.value_of("bed").unwrap();
+            let ref snv_fn = m.value_of("snv").unwrap();
+            let ref out_fn = m.value_of("output").unwrap();
+            let aggregate = m.is_present("aggregate");
+            
+            let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
+                Err(why) => panic!("{:?}", why),
+                Ok(reader) => reader,
+            };
+            
+            let mut snv = match snv::Reader::from_file(snv_fn) {
+                Err(why) => panic!("{:?}", why),
+                Ok(reader) => reader,
+            };
+
+            let mut bed = match bed::Reader::from_file(bed_fn) {
+                Err(why) => panic!("{:?}", why),
+                Ok(reader) => reader,
+            };
+            
+            let regions = Regions::from_bed(&mut bed);
+            
+            // Open a file in write-only mode, returns `io::Result<fs::File>`
+            let mut out_file = match fs::File::create(&out_fn) {
+                Err(why) => panic!("Could not create {}: {:?}",
+                                out_fn,
+                                why),
+                Ok(file) => file,
+            };
+
+            if let Err(why) = regions.write_counts(&mut snv, &mut ifasta, &mut out_file, aggregate) {
+                panic!("Could not write mutation channel counts to file: {}", why);
+            }
         },
         Some("extract-fasta") => {
             let m = matches.subcommand_matches("extract-fasta").unwrap();
