@@ -944,7 +944,7 @@ impl Regions {
                         let region = Region { phase: 0, start: region.start, end: region.end };
                         match seq.assign_channels(&region, snv.pos, snv.nt_ref, snv.nt_alt) {
                             None => {
-                                println!("{}:g.{}{}>{} is not in any region", chrom, snv.pos + 1, snv.nt_ref as char, snv.nt_alt as char);
+                                println!("{}:g.{}{}>{} is not in any region or has insufficient context available", chrom, snv.pos + 1, snv.nt_ref as char, snv.nt_alt as char);
                             },
                             Some(idx) => {
                                 sample_muts[idx] += 1;
