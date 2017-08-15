@@ -1000,7 +1000,9 @@ impl Regions {
         // write results to file
         let mut line = String::new();
         for x in opp.iter() {
-            line.push_str(sep);
+            if !line.is_empty() {
+                line.push_str(sep);
+            }
             line.push_str(&x.to_string());
         }
         try!(writeln!(out, "{}", line));
