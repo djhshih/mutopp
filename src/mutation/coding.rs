@@ -103,40 +103,40 @@ pub enum MutImpact {
 impl From<SeqOntology> for MutImpact {
     fn from(x: SeqOntology) -> Self {
         match x {
-            SpliceAcceptor => MutImpact::SpliceSite,
-            SpliceDonor => MutImpact::SpliceSite,
-            StopGained => MutImpact::StartOrStop,
-            //Frameshift,
-            StopLost => MutImpact::StartOrStop,
-            StartLost => MutImpact::StartOrStop,
-            //TranscriptAmplification,
-            //InframeInsertion,
-            //InframeDeletion,
-            Missense => MutImpact::Missense,
-            //?ProteinAltering,
-            //?SpliceRegion,
-            //IncompleteTerminalCodon,
-            StopRetained => MutImpact::Synonymous,
-            Synonymous => MutImpact::Synonymous,
-            //?CodingSequence,
-            //MatureMiRNA,
-            FivePrimeUTR => MutImpact::Noncoding,
-            ThreePrimeUTR => MutImpact::Noncoding,
-            //NoncodingTranscriptExon,
-            Intron => MutImpact::Noncoding,
-            //NMDTranscript,
-            //NoncodingTranscript,
-            Upstream => MutImpact::Noncoding,
-            Downstream => MutImpact::Noncoding,
-            //TFBSAblation,
-            //TFBSAmplification,
-            //TFBindingSite,
-            //RegulatoryRegionAblation,
-            //RegulatoryRegionAmplification,
-            //FeatureElongation,
-            //RegulatoryRegion,
-            //FeatureTruncation,
-            Intergenic => MutImpact::Noncoding,
+            SeqOntology::SpliceAcceptor => MutImpact::SpliceSite,
+            SeqOntology::SpliceDonor => MutImpact::SpliceSite,
+            SeqOntology::StopGained => MutImpact::StartOrStop,
+            //SeqOntology::Frameshift,
+            SeqOntology::StopLost => MutImpact::StartOrStop,
+            SeqOntology::StartLost => MutImpact::StartOrStop,
+            //SeqOntology::TranscriptAmplification,
+            //SeqOntology::InframeInsertion,
+            //SeqOntology::InframeDeletion,
+            SeqOntology::Missense => MutImpact::Missense,
+            //?SeqOntology::ProteinAltering,
+            //?SeqOntology::SpliceRegion,
+            //SeqOntology::IncompleteTerminalCodon,
+            SeqOntology::StopRetained => MutImpact::Synonymous,
+            SeqOntology::Synonymous => MutImpact::Synonymous,
+            //?SeqOntology::CodingSequence,
+            //SeqOntology::MatureMiRNA,
+            SeqOntology::FivePrimeUTR => MutImpact::Noncoding,
+            SeqOntology::ThreePrimeUTR => MutImpact::Noncoding,
+            //SeqOntology::NoncodingTranscriptExon,
+            SeqOntology::Intron => MutImpact::Noncoding,
+            //SeqOntology::NMDTranscript,
+            //SeqOntology::NoncodingTranscript,
+            SeqOntology::Upstream => MutImpact::Noncoding,
+            SeqOntology::Downstream => MutImpact::Noncoding,
+            //SeqOntology::TFBSAblation,
+            //SeqOntology::TFBSAmplification,
+            //SeqOntology::TFBindingSite,
+            //SeqOntology::RegulatoryRegionAblation,
+            //SeqOntology::RegulatoryRegionAmplification,
+            //SeqOntology::FeatureElongation,
+            //SeqOntology::RegulatoryRegion,
+            //SeqOntology::FeatureTruncation,
+            SeqOntology::Intergenic => MutImpact::Noncoding,
         }
     }
 }
@@ -144,8 +144,8 @@ impl From<SeqOntology> for MutImpact {
 impl MutImpact {
     pub fn iter() -> slice::Iter<'static, MutImpact> {
         use self::MutImpact::*;
-        static classes: [MutImpact; n_mutation_classes] = [Synonymous, Missense, StartOrStop, SpliceSite];
-        classes.into_iter()
+        static MUTATION_CLASSES: [MutImpact; N_MUTATION_CLASSES] = [Synonymous, Missense, StartOrStop, SpliceSite];
+        MUTATION_CLASSES.into_iter()
     }
 }
 
@@ -246,10 +246,10 @@ impl MutEffect {
     }
 }
 
-pub struct MutOpps([u32; n_mutation_types]);
+pub struct MutOpps([u32; N_STRANDED_MUTATION_TYPES]);
 
 impl MutOpps {
-    #[inline]    
+    #[inline] 
     pub fn iter(&self) -> slice::Iter<u32> {
         self.0.iter()
     }
@@ -287,7 +287,7 @@ impl fmt::Display for MutOpps {
     /// Display as n_mutation_channels by n_mutation_classes matrix
     /// matrix is stored in column-major order
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        const I: usize = n_mutation_channels;
+        const I: usize = N_STRANDED_MUTATION_CHANNELS;
 
         // print header
         try!(write!(f, "channel "));
@@ -323,7 +323,7 @@ impl fmt::Display for MutOpps {
 impl MutOpps {
     #[inline]
     pub fn new() -> MutOpps {
-        MutOpps([0; n_mutation_types])
+        MutOpps([0; N_STRANDED_MUTATION_TYPES])
     }
     
     // mutation types are indexed by factors: impact class, stranded substitution, 5' context, and 3' context
@@ -339,7 +339,7 @@ impl MutOpps {
 
         let i = cl as usize;
 
-        const J: usize = n_substitution_types;
+        const J: usize = N_STRANDED_SUBSTITUTION_TYPES;
         let j = match nt_ref {
             b'A' => match nt_alt {
                 b'C' => 0,
@@ -368,7 +368,7 @@ impl MutOpps {
             _ => 0,
         };
 
-        const K: usize = n_nucleotides;
+        const K: usize = N_NUCLEOTIDES;
         let k = match nt_5p {
             b'A' => 0,
             b'C' => 1,
@@ -377,7 +377,7 @@ impl MutOpps {
             _ => 0,
         };
 
-        const L: usize = n_nucleotides;
+        const L: usize = N_NUCLEOTIDES;
         let l = match nt_3p {
             b'A' => 0,
             b'C' => 1,
@@ -391,12 +391,12 @@ impl MutOpps {
 
     pub fn channels() -> Vec<String> {
         let cl = MutImpact::Synonymous;
-        let mut names = vec![String::new(); n_mutation_channels as usize];
-        for &nt_ref in nucleotides.iter() {
-            for &nt_alt in nucleotides.iter() {
+        let mut names = vec![String::new(); N_STRANDED_MUTATION_CHANNELS as usize];
+        for &nt_ref in NUCLEOTIDES.iter() {
+            for &nt_alt in NUCLEOTIDES.iter() {
                 if nt_ref != nt_alt {
-                    for &nt_5p in nucleotides.iter() {
-                        for &nt_3p in nucleotides.iter() {
+                    for &nt_5p in NUCLEOTIDES.iter() {
+                        for &nt_3p in NUCLEOTIDES.iter() {
                             let idx = MutOpps::index(cl, nt_ref, nt_alt, nt_5p, nt_3p);
                             let context_5p = (nt_5p as char).to_ascii_lowercase();
                             let context_3p = (nt_3p as char).to_ascii_lowercase();
@@ -412,13 +412,13 @@ impl MutOpps {
     }
     
     pub fn types() -> Vec<String> {
-        let mut names = vec![String::new(); n_mutation_types as usize];
+        let mut names = vec![String::new(); N_STRANDED_MUTATION_TYPES as usize];
         for &cl in MutImpact::iter() {
-            for &nt_ref in nucleotides.iter() {
-                for &nt_alt in nucleotides.iter() {
+            for &nt_ref in NUCLEOTIDES.iter() {
+                for &nt_alt in NUCLEOTIDES.iter() {
                     if nt_ref != nt_alt {
-                        for &nt_5p in nucleotides.iter() {
-                            for &nt_3p in nucleotides.iter() {
+                        for &nt_5p in NUCLEOTIDES.iter() {
+                            for &nt_3p in NUCLEOTIDES.iter() {
                                 let idx = MutOpps::index(cl, nt_ref, nt_alt, nt_5p, nt_3p);
                                 names[idx] = format!(
                                     "{class}_{c5}{ref}{c3}_{c5}{alt}{c3}",
@@ -438,7 +438,7 @@ impl MutOpps {
     }
     
     fn sum_opp_in_class(&self, cl: MutImpact) -> u32 {
-        const I: usize = n_mutation_channels;
+        const I: usize = N_STRANDED_MUTATION_CHANNELS;
         let j = cl as usize;
         let mut y = 0u32;
         for i in 0 .. I {

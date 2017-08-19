@@ -82,7 +82,7 @@ impl Sequence {
                 Some(&nt_3p) => {
                     // TODO avoid checking each nucleotide three times
                     if nt_5p != b'N' && nt_ref != b'N' && nt_3p != b'N' {
-                        for &nt_alt in nucleotides.iter() {
+                        for &nt_alt in NUCLEOTIDES.iter() {
                             if nt_alt != nt_ref {
                                 let idx = genomic::MutOpps::index(nt_ref, nt_alt, nt_5p, nt_3p);
                                 x[idx] += 1;

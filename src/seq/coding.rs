@@ -1,7 +1,7 @@
 use bio::utils::Strand;
 
 use gene::{Gene,Transcript};
-use seq::{self, Nucleotide, Residue, DnaSeq, Codon, Peptide, complement};
+use seq::{Nucleotide, Residue, DnaSeq, Codon, Peptide, complement};
 use mutation::coding::{MutImpact, MutOpps, MutEffect};
 use constants::*;
 
@@ -51,7 +51,7 @@ pub fn translate(dna: &[Nucleotide]) -> Peptide {
     protein
 }
 
-fn print_translation(dna: &[Nucleotide]) {
+pub fn print_translation(dna: &[Nucleotide]) {
     let protein = translate(dna);
     let s = String::from_utf8(protein).expect("Found invalid protein sequence");
     println!("{}", s);
@@ -660,7 +660,7 @@ fn count_opp_at_slice_site(x: &mut MutOpps, seq: &[u8], begin: usize) {
         let context_5p = seq[begin-1+j];
         let nt_ref = seq[begin+j];
         let context_3p = seq[begin+1+j];
-        for &nt_alt in nucleotides.iter() {
+        for &nt_alt in NUCLEOTIDES.iter() {
             if nt_alt != nt_ref {
                 let idx = MutOpps::index(splice, nt_ref, nt_alt, context_5p, context_3p);
                 x[idx] += 1;
@@ -677,7 +677,7 @@ fn count_opp_at_slice_site(x: &mut MutOpps, seq: &[u8], begin: usize) {
 fn count_opp_at_codon_pos(x: &mut MutOpps, pos: usize, codon: &[u8; 3], aa_ref: u8, context: &[u8; 3]) {
     let nt_ref = context[1];
     // iterate through possible substitutions
-    for &nt_alt in nucleotides.iter() {
+    for &nt_alt in NUCLEOTIDES.iter() {
         if nt_alt != nt_ref {
             let codon_alt = mutate_codon(&codon, pos, nt_alt);
             let aa_alt = codon_to_aa(&codon_alt);
@@ -719,6 +719,7 @@ fn mutate_codon(codon: &[u8; 3], pos: usize, nt_alt: u8) -> [u8; 3] {
 #[cfg(test)]
 mod test {
     use super::*;
+    use seq;
 
     #[test]
     fn test_count_opp_pad0() {

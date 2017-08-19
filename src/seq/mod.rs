@@ -3,8 +3,6 @@ pub mod genomic;
 
 use std::str;
 
-use constants::*;
-
 pub type Nucleotide = u8;
 pub type Residue = u8;
 

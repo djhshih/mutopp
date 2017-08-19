@@ -9,7 +9,7 @@ use std::fmt;
 use csv;
 use crc::crc32;
 
-use seq::{Nucleotide,Residue};
+use seq::Nucleotide;
 
 /// A SNV reader.
 pub struct Reader<R: io::Read> {

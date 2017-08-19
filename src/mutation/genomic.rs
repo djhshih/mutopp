@@ -3,8 +3,6 @@ use std::ops;
 use std::ascii::AsciiExt;
 use std::slice;
 
-use gene::Pos;
-use seq::{Nucleotide,Residue};
 use constants::*;
 
 /// Genomic mutation opportunites
@@ -91,7 +89,7 @@ impl MutOpps {
             _ => 0,
         };
 
-        const K: usize = n_nucleotides;
+        const K: usize = N_NUCLEOTIDES;
         let k = match nt_5p {
             b'A' => 0,
             b'C' => 1,
@@ -100,7 +98,7 @@ impl MutOpps {
             _ => 0,
         };
 
-        const L: usize = n_nucleotides;
+        const L: usize = N_NUCLEOTIDES;
         let l = match nt_3p {
             b'A' => 0,
             b'C' => 1,
@@ -115,10 +113,10 @@ impl MutOpps {
     pub fn channels() -> Vec<String> {
         let mut names = vec![String::new(); N_NONSTRANDED_MUTATION_CHANNELS as usize];
         for &nt_ref in [b'C', b'T'].iter() {
-            for &nt_alt in nucleotides.iter() {
+            for &nt_alt in NUCLEOTIDES.iter() {
                 if nt_ref != nt_alt {
-                    for &nt_5p in nucleotides.iter() {
-                        for &nt_3p in nucleotides.iter() {
+                    for &nt_5p in NUCLEOTIDES.iter() {
+                        for &nt_3p in NUCLEOTIDES.iter() {
                             let idx = MutOpps::index(nt_ref, nt_alt, nt_5p, nt_3p);
                             let context_5p = (nt_5p as char).to_ascii_lowercase();
                             let context_3p = (nt_3p as char).to_ascii_lowercase();
