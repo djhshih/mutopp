@@ -133,6 +133,20 @@ fn main() {
             .arg(Arg::with_name("bed")
                 .help("output gene annotation .bed file")
                 .required(true)))
+        .subcommand(SubCommand::with_name("sample-snv")
+            .about("sample coding SNV according to a mutation spectrum")
+            .arg(Arg::with_name("fasta")
+                .help("input indexed .fasta file (index .fasta.fai file must exist)")
+                .required(true))
+            .arg(Arg::with_name("gff")
+                .help("input gene annotation .gff3 file")
+                .required(true))
+            .arg(Arg::with_name("spectrum")
+                .help("input mutation spectrum .vtr file")
+                .required(true))
+            .arg(Arg::with_name("output")
+                .help("output file")
+                .required(true)))
         .get_matches();
 
     match matches.subcommand_name() {
@@ -360,28 +374,60 @@ fn main() {
         },
         Some("gff-to-bed") => {
             let m = matches.subcommand_matches("gff-to-bed").unwrap();
-            let gff_fn = m.value_of("gff").unwrap();
-						let out_fn = m.value_of("bed").unwrap();
+            let ref gff_fn = m.value_of("gff").unwrap();
+            let ref out_fn = m.value_of("bed").unwrap();
 
-						let mut gff = match gff::Reader::from_file(gff_fn, gff::GffType::GFF3) {
-								Err(why) => panic!("{:?}", why),
-								Ok(reader) => reader,
-						};
+            let mut gff = match gff::Reader::from_file(gff_fn, gff::GffType::GFF3) {
+                    Err(why) => panic!("{:?}", why),
+                    Ok(reader) => reader,
+            };
 
-						let genes = Genes::from_gff(&mut gff);
-						println!("number of valid protein-coding genes: {}", genes.len());
+            let genes = Genes::from_gff(&mut gff);
+            println!("number of valid protein-coding genes: {}", genes.len());
 
-						// Open a file in write-only mode, returns `io::Result<fs::File>`
-						let mut out_file = match fs::File::create(&out_fn) {
-								Err(why) => panic!("Could not create {}: {:?}",
-																out_fn,
-																why),
-								Ok(file) => file,
-						};
+            // Open a file in write-only mode, returns `io::Result<fs::File>`
+            let mut out_file = match fs::File::create(&out_fn) {
+                    Err(why) => panic!("Could not create {}: {:?}",
+                                                    out_fn,
+                                                    why),
+                    Ok(file) => file,
+            };
 
-						if let Err(why) = genes.write_bed(&mut out_file) {
-								panic!("Could not write gene annotations to BED file: {}", why);
-						}
+            if let Err(why) = genes.write_bed(&mut out_file) {
+                panic!("Could not write gene annotations to BED file: {}", why);
+            }
+        },
+        Some("sample-snv") => {
+            let m = matches.subcommand_matches("sample-snv").unwrap();
+            let ref fasta_fn = m.value_of("fasta").unwrap();
+            let ref gff_fn = m.value_of("gff").unwrap();
+            let ref spec_fn = m.value_of("spectrum").unwrap();
+            let ref out_fn = m.value_of("output").unwrap();
+            
+            let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
+                Err(why) => panic!("{:?}", why),
+                Ok(reader) => reader,
+            };
+
+            let mut gff = match gff::Reader::from_file(gff_fn, gff::GffType::GFF3) {
+                Err(why) => panic!("{:?}", why),
+                Ok(reader) => reader,
+            };
+
+            //let genes = Genes::from_gff(&mut gff);
+            //println!("number of valid protein-coding genes: {}", genes.len());
+
+            let mutspec = mutation::genomic::MutSpec::from_file(spec_fn);
+            println!("{:?}", mutspec);
+            
+            // Open a file in write-only mode, returns `io::Result<fs::File>`
+            let mut out_file = match fs::File::create(&out_fn) {
+                Err(why) => panic!("Could not create {}: {:?}",
+                                out_fn,
+                                why),
+                Ok(file) => file,
+            };
+
         },
         None => println!("Type `mutopp help` for help."),
         _ => panic!("Invalid subcommand"),
