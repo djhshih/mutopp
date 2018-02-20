@@ -246,6 +246,7 @@ impl MutEffect {
     }
 }
 
+/// Coding mutation opportunities
 pub struct MutOpps([u32; N_STRANDED_MUTATION_TYPES]);
 
 impl MutOpps {

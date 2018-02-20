@@ -10,7 +10,7 @@ use std::io;
 use std::io::BufRead;
 
 use constants::*;
-
+use seq;
 
 /// Mutation signature spectrum
 pub struct MutSpec([f64; N_NONSTRANDED_MUTATION_CHANNELS]);
@@ -173,26 +173,50 @@ fn channel_vector() -> Vec<String> {
 fn channel_index(nt_ref: u8, nt_alt: u8, nt_5p: u8, nt_3p: u8) -> usize {
     assert!(nt_ref != nt_alt);
 
-    let j = match nt_ref {
-        b'A' => match nt_alt {
+    // non-stranded mutation context
+    let nt_ref_ns;
+    let nt_alt_ns;
+    let nt_5p_ns;
+    let nt_3p_ns;
+
+    match nt_ref {
+        // mutation involves C or T: proceed as is
+        b'C' | b'T' => {
+            nt_ref_ns = nt_ref;
+            nt_alt_ns = nt_alt;
+            nt_5p_ns = nt_5p;
+            nt_3p_ns = nt_3p;
+        },
+        // mutation does not involve C or T: need to reverse complement the mutation context
+        _ => {
+            nt_ref_ns = seq::complement(nt_ref);
+            nt_alt_ns = seq::complement(nt_alt);
+            // flip 5' and 3' as well as complement
+            nt_5p_ns = seq::complement(nt_3p);
+            nt_3p_ns = seq::complement(nt_5p);
+        },
+    }
+
+    let j = match nt_ref_ns {
+        b'A' => match nt_alt_ns {
             b'C' => 5,
             b'G' => 4,
             b'T' => 3,
             _ => 0,
         },
-        b'C' => match nt_alt {
+        b'C' => match nt_alt_ns {
             b'A' => 0,
             b'G' => 1,
             b'T' => 2,
             _ => 0,
         },
-        b'G' => match nt_alt {
+        b'G' => match nt_alt_ns {
             b'A' => 2,
             b'C' => 1,
             b'T' => 0,
             _ => 0,
         },
-        b'T' => match nt_alt {
+        b'T' => match nt_alt_ns {
             b'A' => 3,
             b'C' => 4,
             b'G' => 5,
@@ -202,7 +226,7 @@ fn channel_index(nt_ref: u8, nt_alt: u8, nt_5p: u8, nt_3p: u8) -> usize {
     };
 
     const K: usize = N_NUCLEOTIDES;
-    let k = match nt_5p {
+    let k = match nt_5p_ns {
         b'A' => 0,
         b'C' => 1,
         b'G' => 2,
@@ -211,7 +235,7 @@ fn channel_index(nt_ref: u8, nt_alt: u8, nt_5p: u8, nt_3p: u8) -> usize {
     };
 
     const L: usize = N_NUCLEOTIDES;
-    let l = match nt_3p {
+    let l = match nt_3p_ns {
         b'A' => 0,
         b'C' => 1,
         b'G' => 2,
