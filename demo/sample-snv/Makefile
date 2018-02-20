@@ -1,5 +1,5 @@
 
-all: signature1.tsv output1.tsv
+all: signature1.tsv
 
 signature1.tsv:
 	cut -f 4 ../../data/cosmic-signature-spectra.tsv | sed 1d > $@
