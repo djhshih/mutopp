@@ -149,7 +149,12 @@ fn main() {
                 .required(true))
             .arg(Arg::with_name("output")
                 .help("output file")
-                .required(true)))
+                .required(true))
+            .arg(Arg::with_name("sample-size")
+                .help("number of samples to draw")
+                .short("n")
+                .long("size")
+                .takes_value(true)))
         .get_matches();
 
     match matches.subcommand_name() {
@@ -406,6 +411,7 @@ fn main() {
             let ref gff_fn = m.value_of("gff").unwrap();
             let ref spec_fn = m.value_of("spectrum").unwrap();
             let ref out_fn = m.value_of("output").unwrap();
+            let nsamples = value_t!(m, "sample-size", u32).unwrap_or(10);
             
             let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
                 Err(why) => panic!("{:?}", why),
@@ -430,7 +436,7 @@ fn main() {
             let mutspec = mutation::genomic::MutSpec::from_file(spec_fn);
             //println!("{:?}", mutspec);
 
-            if let Err(why) = write_snv_sample(&mut ifasta, &genes, &mutspec, &mut out_file) {
+            if let Err(why) = write_snv_sample(&mut ifasta, &genes, &mutspec, &mut out_file, nsamples) {
                 panic!("Could not write sampled SNV to out file: {}", why);
             }
         },
@@ -1080,7 +1086,7 @@ impl Regions {
     }
 }
 
-fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec: &mutation::genomic::MutSpec, out: &mut fs::File) -> io::Result<()> {
+fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec: &mutation::genomic::MutSpec, out: &mut fs::File, nsamples: u32) -> io::Result<()> {
     use std::io::Write;
     let sep = "\t";
 
@@ -1089,7 +1095,6 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
 
     let ngenes = genes.len();
 
-    let nsamples = 10;
     let mut rng = rand::thread_rng();
 
     for b in 0..nsamples {
@@ -1097,17 +1102,18 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
 
         // sample a gene uniformly
         let gene = genes.sample(&mut rng);
-        println!("{:?}", gene);
+        println!("Sampled gene: {}", gene.name);
 
-        // sample a transcript from the gene uniformly
-        let ntranscripts = gene.transcripts.len();
-        let t = rand::distributions::Range::new(
-            0, ntranscripts
-        ).ind_sample(&mut rng);
-        let transcript = gene.transcripts.get(
-            gene.transcripts.keys().nth(t).unwrap()
-        ).unwrap();
-        println!("{:?}", transcript);
+        // select the canonical transcript
+        let transcript;
+        match gene.canonical_transcript() {
+            Some(x) => {
+                transcript = x;
+            },
+            None => {
+                break;
+            },
+        }
 
         // sample a region from the transcript uniformly
         let nregions = transcript.coding_regions.len();
@@ -1115,7 +1121,7 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
             0, nregions
         ).ind_sample(&mut rng);
         let region = &transcript.coding_regions[r];
-        println!("{:?}", region);
+        println!("Sampled region: {:?}", region);
 
         // TODO allow sampling of splice sites
 
@@ -1125,7 +1131,7 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
             0, nbases
         ).ind_sample(&mut rng);
         let position = region.start + n;
-        println!("position {}", position);
+        println!("Sampled position: {}", position);
 
         // read reference nucleotide at position
         let mut seq: seq::DnaSeq = vec![b'N'; 1];
@@ -1136,6 +1142,7 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
         let nt_5p = seq[0];
         let nt_ref = seq[1];
         let nt_3p = seq[2];
+        println!("Sequence: {}", str::from_utf8(&seq).unwrap());
 
         // sample an alternative nucleotide uniformly
         let a = rand::distributions::Range::new(
@@ -1168,16 +1175,25 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
             },
             _ => b'N',
         };
+        println!("nt_alt: {}", str::from_utf8(&[nt_alt]).unwrap());
 
         // w(x) = p(x) / q(x)
         // where p(x) is the target distribution
         //       q(x) is the sampling distribution
-        let q = (1.0 / ngenes as f64) * (1.0 / ntranscripts as f64) * 
-            (1.0 / nregions as f64) * (1.0 / nbases as f64) * (1.0 / 3.0);
+        let q = (1.0 / ngenes as f64) * (1.0 / nregions as f64) * 
+            (1.0 / nbases as f64) * (1.0 / 3.0);
         // p(x) is defined by the input mutation spectrum
         let channel = mutation::genomic::MutSpec::index(nt_ref, nt_alt, nt_5p, nt_3p);
         let p = mutspec[channel];
         let weight = p / q;
+        println!("p: {}", p);
+        println!("q: {}", q);
+        println!("weight: {}", weight);
+
+        let mut context = seq.clone();
+        if nt_ref != b'C' && nt_ref  != b'T' {
+            seq::reverse_complement(&mut context);
+        }
 
         let line = vec![
             gene.chrom.clone(),
@@ -1185,7 +1201,7 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
             (position + 1).to_string(),
             str::from_utf8(&[nt_ref]).unwrap().to_owned(),
             str::from_utf8(&[nt_alt]).unwrap().to_owned(),
-            str::from_utf8(&seq).unwrap().to_owned(),
+            str::from_utf8(&context).unwrap().to_owned(),
             weight.to_string(),
         ].join(sep);
 

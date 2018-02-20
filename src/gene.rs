@@ -21,6 +21,24 @@ pub struct Gene {
     pub transcripts: LinkedHashMap<String, Transcript>,
 }
 
+impl Gene {
+
+    /// Return the transcript with the longest coding regions.
+    pub fn canonical_transcript(&self) -> Option<&Transcript> {
+        let mut canonical = None;
+        let mut canonical_len = 0;
+        for x in self.transcripts.iter() {
+            let t = x.1;
+            let current_len = t.coding_len();
+            if current_len > canonical_len {
+                canonical = Some(t);
+                canonical_len = current_len;
+            }
+        }
+        canonical
+    }
+}
+
 /// Transcript.
 /// All positions are 0-based.
 #[derive(Debug)]
@@ -33,6 +51,21 @@ pub struct Transcript {
     pub coding_regions: Vec<Region>,
 }
 
+impl Transcript {
+    #[inline]
+    pub fn len(&self) -> Pos {
+        self.end - self.start
+    }
+
+    pub fn coding_len(&self) -> Pos {
+        let mut n = 0;
+        for r in &self.coding_regions {
+            n += r.len(); 
+        }
+        n
+    }
+}
+
 /// Region.
 /// All positions are 0-based.
 #[derive(Debug)]
@@ -43,4 +76,11 @@ pub struct Region {
     pub start: Pos,
     /// Genomic end position (exclusive)
     pub end: Pos,
+}
+
+impl Region {
+    #[inline]
+    pub fn len(&self) -> Pos {
+        self.end - self.start
+    }
 }
