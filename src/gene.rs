@@ -34,6 +34,7 @@ pub struct Transcript {
 }
 
 /// Region.
+/// All positions are 0-based.
 #[derive(Debug)]
 pub struct Region {
     /// Number of nucleotides to remove before the start of the first complete codon

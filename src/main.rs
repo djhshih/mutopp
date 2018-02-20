@@ -4,6 +4,9 @@ extern crate linked_hash_map;
 #[macro_use] extern crate clap;
 extern crate mutopp;
 
+extern crate rand;
+use rand::distributions::IndependentSample;
+
 use std::io;
 use std::str;
 use std::fs;
@@ -414,13 +417,6 @@ fn main() {
                 Ok(reader) => reader,
             };
 
-            //let genes = Genes::from_gff(&mut gff);
-            //println!("number of valid protein-coding genes: {}", genes.len());
-
-            let mutspec = mutation::genomic::MutSpec::from_file(spec_fn);
-            println!("{:?}", mutspec);
-            
-            // Open a file in write-only mode, returns `io::Result<fs::File>`
             let mut out_file = match fs::File::create(&out_fn) {
                 Err(why) => panic!("Could not create {}: {:?}",
                                 out_fn,
@@ -428,6 +424,15 @@ fn main() {
                 Ok(file) => file,
             };
 
+            let genes = Genes::from_gff(&mut gff);
+            println!("number of valid protein-coding genes: {}", genes.len());
+
+            let mutspec = mutation::genomic::MutSpec::from_file(spec_fn);
+            //println!("{:?}", mutspec);
+
+            if let Err(why) = write_snv_sample(&mut ifasta, &genes, &mutspec, &mut out_file) {
+                panic!("Could not write sampled SNV to out file: {}", why);
+            }
         },
         None => println!("Type `mutopp help` for help."),
         _ => panic!("Invalid subcommand"),
@@ -474,6 +479,8 @@ struct Genes {
     /// index maps chromosome to interval tree
     /// interval tree stores interval and gene id
     index: LinkedHashMap<String, IntervalTree<Pos, String>>,
+    /// vector of gene names
+    names: Vec<String>,
 }
 
 impl Genes {
@@ -484,6 +491,7 @@ impl Genes {
         Genes {
             map: LinkedHashMap::with_capacity(ngenes),
             index: LinkedHashMap::with_capacity(nchroms),
+            names: Vec::with_capacity(ngenes),
         }
     }
     
@@ -555,8 +563,10 @@ impl Genes {
         let mut genes = Genes {
             map: map_filtered,
             index: genes.index,
+            names: genes.names,
         };
         genes.build_index();
+        genes.build_keys();
 
         genes
     }
@@ -565,7 +575,20 @@ impl Genes {
     pub fn len(&self) -> usize {
         self.map.len()
     }
-    
+
+    /// Draw a gene sample.
+    pub fn sample<R: rand::Rng>(&self, rng: &mut R) -> &Gene {
+        let range = rand::distributions::Range::new(0, self.len());
+        &self.map[&self.names[range.ind_sample(rng)]]
+    }
+
+    /// Build vector of gene names.
+    fn build_keys(&mut self) {
+        for k in self.map.keys() {
+            self.names.push(k.clone());
+        }
+    }
+
     /// Build interval tree index for genes.
     fn build_index(&mut self) {
         for (gid, gene) in self.map.iter() {
@@ -1055,4 +1078,119 @@ impl Regions {
 
         Ok(())
     }
+}
+
+fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec: &mutation::genomic::MutSpec, out: &mut fs::File) -> io::Result<()> {
+    use std::io::Write;
+    let sep = "\t";
+
+    let header = vec![String::from("chrom"), String::from("pos"), String::from("ref"), String::from("alt"), String::from("context"), String::from("weight")];
+    try!(writeln!(out, "{}", header.join(sep)));
+
+    let ngenes = genes.len();
+
+    let nsamples = 10;
+    let mut rng = rand::thread_rng();
+
+    for b in 0..nsamples {
+        println!("sample {}", b);
+
+        // sample a gene uniformly
+        let gene = genes.sample(&mut rng);
+        println!("{:?}", gene);
+
+        // sample a transcript from the gene uniformly
+        let ntranscripts = gene.transcripts.len();
+        let t = rand::distributions::Range::new(
+            0, ntranscripts
+        ).ind_sample(&mut rng);
+        let transcript = gene.transcripts.get(
+            gene.transcripts.keys().nth(t).unwrap()
+        ).unwrap();
+        println!("{:?}", transcript);
+
+        // sample a region from the transcript uniformly
+        let nregions = transcript.coding_regions.len();
+        let r = rand::distributions::Range::new(
+            0, nregions
+        ).ind_sample(&mut rng);
+        let region = &transcript.coding_regions[r];
+        println!("{:?}", region);
+
+        // TODO allow sampling of splice sites
+
+        // sample a position from the region uniformly
+        let nbases = region.end - region.start;
+        let n = rand::distributions::Range::new(
+            0, nbases
+        ).ind_sample(&mut rng);
+        let position = region.start + n;
+        println!("position {}", position);
+
+        // read reference nucleotide at position
+        let mut seq: seq::DnaSeq = vec![b'N'; 1];
+        if let Err(why) = ifasta.read(&gene.chrom, position - 1, position + 2, &mut seq) {
+            panic!("{:?}", why);
+        }
+
+        let nt_5p = seq[0];
+        let nt_ref = seq[1];
+        let nt_3p = seq[2];
+
+        // sample an alternative nucleotide uniformly
+        let a = rand::distributions::Range::new(
+            0, 3
+        ).ind_sample(&mut rng);
+        let nt_alt = match nt_ref {
+            b'A' => match a {
+                0 => b'C',
+                1 => b'G',
+                2 => b'T',
+                _ => b'N',
+            },
+            b'C' => match a {
+                0 => b'A',
+                1 => b'G',
+                2 => b'T',
+                _ => b'N',
+            },
+            b'G' => match a {
+                0 => b'A',
+                1 => b'C',
+                2 => b'T',
+                _ => b'N',
+            },
+            b'T' =>  match a {
+                0 => b'A',
+                1 => b'C',
+                2 => b'G',
+                _ => b'N',
+            },
+            _ => b'N',
+        };
+
+        // w(x) = p(x) / q(x)
+        // where p(x) is the target distribution
+        //       q(x) is the sampling distribution
+        let q = (1.0 / ngenes as f64) * (1.0 / ntranscripts as f64) * 
+            (1.0 / nregions as f64) * (1.0 / nbases as f64) * (1.0 / 3.0);
+        // p(x) is defined by the input mutation spectrum
+        let channel = mutation::genomic::MutSpec::index(nt_ref, nt_alt, nt_5p, nt_3p);
+        let p = mutspec[channel];
+        let weight = p / q;
+
+        let line = vec![
+            gene.chrom.clone(),
+            // convert from 0-based to 1-based
+            (position + 1).to_string(),
+            str::from_utf8(&[nt_ref]).unwrap().to_owned(),
+            str::from_utf8(&[nt_alt]).unwrap().to_owned(),
+            str::from_utf8(&seq).unwrap().to_owned(),
+            weight.to_string(),
+        ].join(sep);
+
+        try!(writeln!(out, "{}", line));
+    }
+
+    Ok(())
 }
