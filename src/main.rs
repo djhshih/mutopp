@@ -1098,11 +1098,11 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
     let mut rng = rand::thread_rng();
 
     for b in 0..nsamples {
-        println!("sample {}", b);
+        //println!("sample {}", b);
 
         // sample a gene uniformly
         let gene = genes.sample(&mut rng);
-        println!("Sampled gene: {}", gene.name);
+        //println!("Sampled gene: {}", gene.name);
 
         // select the canonical transcript
         let transcript;
@@ -1121,7 +1121,7 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
             0, nregions
         ).ind_sample(&mut rng);
         let region = &transcript.coding_regions[r];
-        println!("Sampled region: {:?}", region);
+        //println!("Sampled region: {:?}", region);
 
         // TODO allow sampling of splice sites
 
@@ -1131,7 +1131,7 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
             0, nbases
         ).ind_sample(&mut rng);
         let position = region.start + n;
-        println!("Sampled position: {}", position);
+        //println!("Sampled position: {}", position);
 
         // read reference nucleotide at position
         let mut seq: seq::DnaSeq = vec![b'N'; 1];
@@ -1142,7 +1142,7 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
         let nt_5p = seq[0];
         let nt_ref = seq[1];
         let nt_3p = seq[2];
-        println!("Sequence: {}", str::from_utf8(&seq).unwrap());
+        //println!("Sequence: {}", str::from_utf8(&seq).unwrap());
 
         // sample an alternative nucleotide uniformly
         let a = rand::distributions::Range::new(
@@ -1175,7 +1175,7 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
             },
             _ => b'N',
         };
-        println!("nt_alt: {}", str::from_utf8(&[nt_alt]).unwrap());
+        //println!("nt_alt: {}", str::from_utf8(&[nt_alt]).unwrap());
 
         // w(x) = p(x) / q(x)
         // where p(x) is the target distribution
@@ -1186,9 +1186,9 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
         let channel = mutation::genomic::MutSpec::index(nt_ref, nt_alt, nt_5p, nt_3p);
         let p = mutspec[channel];
         let weight = p / q;
-        println!("p: {}", p);
-        println!("q: {}", q);
-        println!("weight: {}", weight);
+        //println!("p: {}", p);
+        //println!("q: {}", q);
+        //println!("weight: {}", weight);
 
         let mut context = seq.clone();
         if nt_ref != b'C' && nt_ref  != b'T' {
