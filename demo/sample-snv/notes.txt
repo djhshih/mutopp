@@ -1,0 +1,7 @@
+Exome is ~40 Mb.
+Each base has 3 possible mutations.
+Assume that each mutation can be described in 50 bytes in text format.
+
+Therefore, the total space requirement to describe all possible mutations in text format is:
+
+40e6 * 3 * 50 bytes = 5.6 GiB
