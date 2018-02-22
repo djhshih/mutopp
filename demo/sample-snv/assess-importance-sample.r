@@ -57,7 +57,11 @@ entropy <- function(v) {
 # bounded in [-1, 1]
 # higher value => more similar
 cos_sim <- function(x, y) {
-	sum(x * y) / (sqrt(sum(x * x)) * sqrt(sum(y * y)))
+	sum(x * y) / sqrt(sum(x * x) * sum(y * y))
+}
+
+kld <- function(p, q) {
+	sum( ifelse(p == 0, 0, p * (log2(p) - log2(q))) )
 }
 
 # Jensen-Shannon Divergence using log2
@@ -70,10 +74,7 @@ jsd <- function(p, q) {
 
 	m <- 0.5 * (p + q);
 
-	0.5 * (
-		sum( ifelse(p == 0, 0, p * (log2(p) - log2(m))) ) + 
-		sum( ifelse(q == 0, 0, q * (log2(q) - log2(m))) )
-	)
+	0.5 * (kld(p, m) + kld(q, m))
 }
 
 ####
