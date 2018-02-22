@@ -1,5 +1,3 @@
-use std::cmp;
-
 extern crate rand;
 use sample::rand::distributions::IndependentSample;
 

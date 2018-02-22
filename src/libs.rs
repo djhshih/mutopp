@@ -8,7 +8,7 @@ pub mod mutation;
 pub mod gene;
 pub mod io;
 pub mod utils;
+pub mod stats;
+pub mod sample;
 
 mod constants;
-mod sample;
-mod stats;

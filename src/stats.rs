@@ -46,15 +46,16 @@ pub fn dot_product(xs: &[f64], ys: &[f64]) -> f64 {
 /// Cosine similarity
 /// bounded in [-1, 1]
 pub fn cosine_similarity(xs: &[f64], ys: &[f64]) -> f64 {
-   dot_product(xs, ys) / (dot_product(xs, xs) * dot_product(ys, ys)).sqrt()
+    dot_product(xs, ys) / (dot_product(xs, xs) * dot_product(ys, ys)).sqrt()
 }
 
-pub fn scale(xs: &[f64]) -> Vec<f64> {
+/// Scale a vector xs to s.t. sum(xs) == 1
+pub fn scale(xs: &mut [f64]) {
     let s: f64 = xs.iter().sum();
-    if s == 1.0 {
-        xs.to_owned()
-    } else {
-        xs.iter().map(|x| x / s).collect()
+    if s != 1.0 {
+        for x in xs.iter_mut() {
+            *x /= s;
+        }
     }
 }
 
@@ -75,12 +76,9 @@ pub fn kl_divergence(p: &[f64], q: &[f64]) -> f64 {
 }
 
 /// Jensen-Shannon Divergence using log2
+/// p and q must be proper discrete distributions
 /// bounded in [0, 1]
 pub fn js_divergence(p: &[f64], q: &[f64]) -> f64 {
-    // ensure that p and q are proper distributions
-    let p = scale(p);
-    let q = scale(q);
-
     let m: Vec<f64> = p.iter().zip(q.iter()).map(|(&x, &y)| 0.5 * (x + y)).collect();
     
     0.5 * (kl_divergence(&p, &m) + kl_divergence(&q, &m))
@@ -120,5 +118,14 @@ mod tests {
         assert!((cosine_similarity(&vec![0.0, 0.1, 0.9], &vec![0.0, 0.1, 0.9]) - 1.0).abs() < EPS);
         assert!((cosine_similarity(&vec![0.1, 0.1, 0.8], &vec![0.1, 0.2, 0.7]) - 0.9882872).abs() < EPS);
         assert!((cosine_similarity(&vec![0.1, 0.2, 0.7], &vec![0.1, 0.1, 0.8]) - 0.9882872).abs() < EPS);
+    }
+
+    #[test]
+    fn test_scale() {
+        let mut xs = vec![1.0, 1.2, 0.3];
+        scale(&mut xs);
+        assert!((xs[0] - 0.40).abs() < EPS);
+        assert!((xs[1] - 0.48).abs() < EPS);
+        assert!((xs[2] - 0.12).abs() < EPS);
     }
 }

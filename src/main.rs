@@ -27,6 +27,8 @@ use mutopp::seq::{self,Nucleotide};
 use mutopp::mutation;
 use mutopp::utils;
 use mutopp::io::snv;
+use mutopp::sample;
+use mutopp::stats;
 
 type FastaIndexedReader = fasta::IndexedReader<fs::File>;
 type GffReader = gff::Reader<fs::File>;
@@ -148,12 +150,17 @@ fn main() {
                 .help("input mutation spectrum .vtr file")
                 .required(true))
             .arg(Arg::with_name("output")
-                .help("output file")
+                .help("output file for the sample")
                 .required(true))
             .arg(Arg::with_name("sample-size")
                 .help("number of samples to draw")
                 .short("n")
                 .long("size")
+                .takes_value(true))
+            .arg(Arg::with_name("output-imp")
+                .help("output file for importance sample")
+                .short("i")
+                .long("output-imp")
                 .takes_value(true)))
         .get_matches();
 
@@ -411,7 +418,7 @@ fn main() {
             let ref gff_fn = m.value_of("gff").unwrap();
             let ref spec_fn = m.value_of("spectrum").unwrap();
             let ref out_fn = m.value_of("output").unwrap();
-            let nsamples = value_t!(m, "sample-size", u32).unwrap_or(10);
+            let nsamples = value_t!(m, "sample-size", usize).unwrap_or(10);
             
             let mut ifasta = match fasta::IndexedReader::from_file(fasta_fn) {
                 Err(why) => panic!("{:?}", why),
@@ -423,12 +430,25 @@ fn main() {
                 Ok(reader) => reader,
             };
 
-            let mut out_file = match fs::File::create(&out_fn) {
-                Err(why) => panic!("Could not create {}: {:?}",
-                                out_fn,
-                                why),
+            let mut out = match fs::File::create(&out_fn) {
+                Err(why) => panic!("Could not create {}: {:?}", out_fn, why),
                 Ok(file) => file,
             };
+
+            let mut out_imp: fs::File;
+            let out_imp_opt = match m.value_of("output-imp") {
+                Some(out_imp_fn) => {
+                    match fs::File::create(&out_imp_fn) {
+                        Err(why) => panic!("Could not create {}: {:?}", out_imp_fn, why),
+                        Ok(file) => {
+                            out_imp = file;
+                            Some(&mut out_imp)
+                        },
+                    }
+                },
+                None => None,
+            };
+
 
             let genes = Genes::from_gff(&mut gff);
             println!("number of valid protein-coding genes: {}", genes.len());
@@ -436,7 +456,7 @@ fn main() {
             let mutspec = mutation::genomic::MutSpec::from_file(spec_fn);
             //println!("{:?}", mutspec);
 
-            if let Err(why) = write_snv_sample(&mut ifasta, &genes, &mutspec, &mut out_file, nsamples) {
+            if let Err(why) = write_snv_sample(&mut ifasta, &genes, &mutspec, &mut out, nsamples, out_imp_opt) {
                 panic!("Could not write sampled SNV to out file: {}", why);
             }
         },
@@ -1086,20 +1106,56 @@ impl Regions {
     }
 }
 
-fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec: &mutation::genomic::MutSpec, out: &mut fs::File, nsamples: u32) -> io::Result<()> {
+struct MutSpecSnv {
+    /// chromosome
+    chrom: String,
+    /// genomic position
+    pos: u64,
+    /// reference nucleotide
+    nt_ref: Nucleotide,
+    /// alternative nucleotide
+    nt_alt: Nucleotide,
+    /// 5' nucleotide
+    nt_5p: Nucleotide,
+    /// 3'nucleotide
+    nt_3p: Nucleotide,
+    /// channel index
+    channel: usize,
+}
+
+fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec: &mutation::genomic::MutSpec, out: &mut fs::File, nsamples: usize, mut out_imp_opt: Option<&mut fs::File>) -> io::Result<()> {
     use std::io::Write;
     let sep = "\t";
 
-    let header = vec![String::from("chrom"), String::from("pos"), String::from("ref"), String::from("alt"), String::from("context"), String::from("weight")];
-    try!(writeln!(out, "{}", header.join(sep)));
+    if let Some(ref mut out_imp) = out_imp_opt {
+        let header = vec![
+            String::from("chrom"),
+            String::from("pos"),
+            String::from("ref"),
+            String::from("alt"),
+            String::from("context"),
+            String::from("lweight")
+        ];
+
+        try!(writeln!(out_imp, "{}", header.join(sep)));
+    }
 
     let ngenes = genes.len();
 
+    //let batch_size = 1e6;
+
     let mut rng = rand::thread_rng();
 
-    for b in 0..nsamples {
-        //println!("sample {}", b);
+    let size_factor = 100;
 
+    // number of importance samples
+    let nsamples_imp = (nsamples * size_factor) as usize;
+
+    let mut snvs: Vec<MutSpecSnv> = Vec::with_capacity(nsamples_imp);
+    let mut weights: Vec<f64> = Vec::with_capacity(nsamples_imp);
+
+    // draw the importance samples
+    for _ in 0..nsamples_imp {
         // sample a gene uniformly
         let gene = genes.sample(&mut rng);
         //println!("Sampled gene: {}", gene.name);
@@ -1185,25 +1241,99 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
         // p(x) is defined by the input mutation spectrum
         let channel = mutation::genomic::MutSpec::index(nt_ref, nt_alt, nt_5p, nt_3p);
         let p = mutspec[channel];
-        let weight = p / q;
+        let lweight = (p / q).ln();
         //println!("p: {}", p);
         //println!("q: {}", q);
         //println!("weight: {}", weight);
+        
+        snvs.push(
+            MutSpecSnv {
+                chrom: gene.chrom.clone(),
+                pos: position,
+                nt_ref: nt_ref,
+                nt_alt: nt_alt,
+                nt_5p: nt_5p,
+                nt_3p: nt_3p,
+                channel: channel,
+            }
+        );
 
-        let mut context = seq.clone();
+        weights.push(lweight);
+
+        if let Some(ref mut out_imp) = out_imp_opt {
+            let mut context = seq.clone();
+            if nt_ref != b'C' && nt_ref  != b'T' {
+                seq::reverse_complement(&mut context);
+            }
+
+            let line = vec![
+                gene.chrom.clone(),
+                // convert from 0-based to 1-based
+                (position + 1).to_string(),
+                str::from_utf8(&[nt_ref]).unwrap().to_owned(),
+                str::from_utf8(&[nt_alt]).unwrap().to_owned(),
+                str::from_utf8(&context).unwrap().to_owned(),
+                lweight.to_string(),
+            ].join(sep);
+
+            try!(writeln!(out_imp, "{}", line));
+        }
+    }
+
+    
+    // normalize the log importance weights and anti-log transform
+    let lweight_sum = stats::log_sum_exp(&weights);
+    for w in weights.iter_mut() {
+        *w = (*w - lweight_sum).exp();
+    }
+
+    // weights now contain sampling probabilities,
+    // which we use to resample the SNVs
+    let sample_idx = sample::sample(&weights, nsamples, false, &mut rng);
+
+    // count mutations in each channels for the resampled data
+    let mut counts = vec![0 as u64; mutation::genomic::MutSpec::len()];
+    for &i in sample_idx.iter() {
+        counts[ snvs[i].channel ] += 1;
+    }
+    let mut counts_sum = 0.0;
+    for &c in counts.iter() {
+        counts_sum += c as f64;
+    }
+
+    // observed mutation spectrum in the resampled data
+    let mutspec_sample: Vec<f64> = counts.iter().map(|&x| (x as f64) / counts_sum).collect();
+    println!("Jensen-Shannon Divergence: {}", stats::js_divergence(&mutspec.0, &mutspec_sample));
+
+    // write resampled SNVs to file 
+
+    let header = vec![
+        String::from("chrom"),
+        String::from("pos"),
+        String::from("ref"),
+        String::from("alt"),
+        String::from("context"),
+    ];
+
+    try!(writeln!(out, "{}", header.join(sep)));
+
+    for &i in sample_idx.iter() {
+        let MutSpecSnv { ref chrom, pos: position, nt_ref, nt_alt, nt_5p, nt_3p, _ } = snvs[i];
+
+        let mut context = vec![nt_5p, nt_ref, nt_3p];
         if nt_ref != b'C' && nt_ref  != b'T' {
             seq::reverse_complement(&mut context);
         }
 
         let line = vec![
-            gene.chrom.clone(),
+            chrom.clone(),
             // convert from 0-based to 1-based
             (position + 1).to_string(),
             str::from_utf8(&[nt_ref]).unwrap().to_owned(),
             str::from_utf8(&[nt_alt]).unwrap().to_owned(),
             str::from_utf8(&context).unwrap().to_owned(),
-            weight.to_string(),
         ].join(sep);
+
 
         try!(writeln!(out, "{}", line));
     }

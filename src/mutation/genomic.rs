@@ -13,7 +13,7 @@ use constants::*;
 use seq;
 
 /// Mutation signature spectrum
-pub struct MutSpec([f64; N_NONSTRANDED_MUTATION_CHANNELS]);
+pub struct MutSpec(pub [f64; N_NONSTRANDED_MUTATION_CHANNELS]);
 
 impl MutSpec {
     #[inline]
