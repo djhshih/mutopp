@@ -3,9 +3,20 @@ use std::cmp;
 extern crate rand;
 use sample::rand::distributions::IndependentSample;
 
-/// Sample k from n elements with replacement.
+/// Sample k from n elements.
 /// prob[i] represents the probability of sampling element i
-pub fn sample(prob: &[f64], k: usize, mut rng: &mut rand::Rng) -> Vec<usize> {
+/// prob[i] >= 0 && sum(prob) = 1
+pub fn sample(prob: &[f64], k: usize, replace: bool, mut rng: &mut rand::Rng) -> Vec<usize> {
+    if replace {
+        sample_replace(prob, k, &mut rng)
+    } else {
+        sample_no_replace(prob, k, &mut rng)
+    }
+}
+
+/// Sample k from n elements with replacement.
+// TODO replace with more efficient algorithm
+fn sample_replace(prob: &[f64], k: usize, mut rng: &mut rand::Rng) -> Vec<usize> {
     let n = prob.len();
 
     if n == 0 {
@@ -14,6 +25,7 @@ pub fn sample(prob: &[f64], k: usize, mut rng: &mut rand::Rng) -> Vec<usize> {
         return vec![0; k];
     }
 
+    // time O(n log n)
     let mut p = indexed_revsorted(&prob);
 
     // convert probabilities into cumulative probabilities
@@ -23,6 +35,7 @@ pub fn sample(prob: &[f64], k: usize, mut rng: &mut rand::Rng) -> Vec<usize> {
     }
 
     // draw samples with replacement
+    // time O(n k)
     // i.e. previously drawn samples are not removed
     let mut ys = Vec::with_capacity(k);
     let r = rand::distributions::Range::new(0.0, 1.0);
@@ -34,64 +47,32 @@ pub fn sample(prob: &[f64], k: usize, mut rng: &mut rand::Rng) -> Vec<usize> {
         while j < last && u > p[j].0 {
             j += 1;
         }
+        // record the element index
         ys.push(p[j].1);
     }
    
     ys
 }
 
-/*
-static void ProbSampleNoReplace(int n, double *p, int *perm,
-				int nans, int *ans)
-{
-    double rT, mass, totalmass;
-    int i, j, k, n1;
-
-    /* Record element identities */
-    for (i = 0; i < n; i++)
-	perm[i] = i + 1;
-
-    /* Sort probabilities into descending order */
-    /* Order element identities in parallel */
-    revsort(p, perm, n);
-
-    /* Compute the sample */
-    totalmass = 1;
-    for (i = 0, n1 = n-1; i < nans; i++, n1--) {
-	rT = totalmass * unif_rand();
-	mass = 0;
-	for (j = 0; j < n1; j++) {
-	    mass += p[j];
-	    if (rT <= mass)
-		break;
-	}
-	ans[i] = perm[j];
-	totalmass -= p[j];
-	for(k = j; k < n1; k++) {
-	    p[k] = p[k + 1];
-	    perm[k] = perm[k + 1];
-	}
-    }
-}
-*/
-
 /// Sample k from n elements without replacement.
-/// prob[i] represents the probability of sampling element i
-pub fn subsample(prob: &[f64], k: usize, mut rng: &mut rand::Rng) -> Vec<usize> {
+// TODO consider sampling with replacement but either
+// 1. keep track of sampled elements using a map, or
+// 2. remove duplicates later
+fn sample_no_replace(prob: &[f64], k: usize, mut rng: &mut rand::Rng) -> Vec<usize> {
     let n = prob.len();
 
-    if n == 0 {
+    if n == 0 || n < k {
         return Vec::new();
     } else if n == 1 {
         return vec![0; k];
-    } else if n <= k {
-        return Vec::new();
     }
 
+    // time O(n log n)
     let mut p = indexed_revsorted(&prob);
 
     // draw samples without replacment
     // i.e. previously drawn samples are removed
+    // time O(k n)
     let mut ys = Vec::with_capacity(k);
     let r = rand::distributions::Range::new(0.0, 1.0);
     let mut total = 1.0;
@@ -108,6 +89,7 @@ pub fn subsample(prob: &[f64], k: usize, mut rng: &mut rand::Rng) -> Vec<usize> 
             mass += p[j].0;
             j += 1;
         }
+        // record the element index
         ys.push(p[j].1);
 
         // remove element j from the roulette
@@ -160,10 +142,13 @@ mod tests {
         
         let mut rng = rand::thread_rng();
 
-        let boot = sample(&prob, 10, &mut rng);
+        let boot = sample(&prob, 10, true, &mut rng);
         assert_eq!(boot.len(), 10);
 
-        let sub = subsample(&prob, 4, &mut rng);
+        let sub = sample(&prob, 4, false, &mut rng);
         assert_eq!(sub.len(), 4);
+
+        let invalid = sample(&prob, 20, false, &mut rng);
+        assert!(invalid.is_empty());
     }
 }
