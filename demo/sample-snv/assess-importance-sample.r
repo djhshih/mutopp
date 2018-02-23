@@ -102,7 +102,7 @@ stopifnot(!is.na(x$channel))
 
 message("Importance sampling")
 
-activities.is <- tapply(x$weight, x$channel, sum);
+activities.is <- tapply(exp(x$lweight), x$channel, sum);
 stopifnot(names(sig) == names(activities.is))
 activities.is[is.na(activities.is)] <- 0;
 
@@ -126,7 +126,7 @@ message("Sampling importance resampling")
 # subsample the importance samples
 b <- 0.01;
 nsubsample <- ceiling(b * nrow(x));
-norm.weights <- x$weight / sum(x$weight);
+norm.weights <- exp(x$lweight - log(sum(exp(x$lweight))));
 y <- x[sample.int(nrow(x), nsubsample, replace=FALSE, prob = norm.weights), ];
 qwrite(y[, ! colnames(y) %in% c("weight", "channel")], insert(out.fname, "sir"));
 

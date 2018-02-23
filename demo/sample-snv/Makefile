@@ -1,4 +1,4 @@
-nsamples = 1000
+nsamples = 100
 fasta = ../../data/reference.fa
 gff3 = ../../data/genes.gff3
 
@@ -26,5 +26,5 @@ signature7.vtr:
 	cut -f 10 ../../data/cosmic-signature-spectra.tsv | sed 1d > $@
 
 test: signature1.vtr
-	../../target/debug/mutopp sample-snv -n $(nsamples) $(fasta) $(gff3) signature1.vtr sample_signature1.tsv
+	../../target/debug/mutopp sample-snv -n $(nsamples) --output-imp imp-sample_signature1.tsv $(fasta) $(gff3) signature1.vtr sample_signature1.tsv
 
