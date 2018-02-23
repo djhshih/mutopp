@@ -25,6 +25,9 @@ signature6.vtr:
 signature7.vtr:
 	cut -f 10 ../../data/cosmic-signature-spectra.tsv | sed 1d > $@
 
-test: signature1.vtr
+test: signature1.vtr signature4.vtr
 	../../target/debug/mutopp sample-snv -n $(nsamples) --output-imp imp-sample_signature1.tsv $(fasta) $(gff3) signature1.vtr sample_signature1.tsv
+	../../target/debug/mutopp sample-snv -n $(nsamples) --output-imp imp-sample_signature2.tsv $(fasta) $(gff3) signature1.vtr sample_signature2.tsv
+	../../target/debug/mutopp sample-snv -n $(nsamples) --output-imp imp-sample_signature3.tsv $(fasta) $(gff3) signature1.vtr sample_signature3.tsv
+	../../target/debug/mutopp sample-snv -n $(nsamples) --output-imp imp-sample_signature4.tsv $(fasta) $(gff3) signature4.vtr sample_signature4.tsv
 

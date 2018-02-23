@@ -7,11 +7,13 @@ library(argparser, quietly=TRUE, warn=FALSE);
 
 pr <- arg_parser("Assess an importance sample of mutations according to signature spectrum");
 pr <- add_argument(pr, "signature", help="input signature spectrum");
-pr <- add_argument(pr, "sample", help="input importance sample");
+pr <- add_argument(pr, "wsample", help="input importance sample");
+pr <- add_argument(pr, "sample", help="input sample");
 
 argv <- parse_args(pr);
 
 signature.fn <- argv$signature;
+wsample.fn <- argv$wsample;
 sample.fn <- argv$sample;
 
 out.fname <- as.filename(sample.fn);
@@ -88,7 +90,7 @@ sig.df <- data.frame(
 );
 
 # read weighted samples
-x <- qread(sample.fn);
+x <- qread(wsample.fn);
 
 
 flip <- x$ref %in% c("C", "T");
@@ -137,6 +139,25 @@ message("Number of empty channels: ", sum(activities.sir == 0));
 activities.sir <- activities.sir / sum(activities.sir);
 
 qdraw({barplot(activities.sir, las=2, cex.name=0.5)}, width = 12, height = 4, file=insert(pdf.fname, c("spectrum", "sir")));
+
+message("Cosine similarity: ", cos_sim(sig, activities.sir))
+message("Jensen-Shannon Divergence: ", jsd(sig, activities.sir))
+
+message("");
+
+####
+
+message("Sampling importance resampling from mutopp")
+
+y <- x[sample.int(nrow(x), nsubsample, replace=FALSE, prob = norm.weights), ];
+
+activities.sir <- table(y$channel);
+stopifnot(names(sig) == names(activities.sir))
+message("Number of empty channels: ", sum(activities.sir == 0));
+
+activities.sir <- activities.sir / sum(activities.sir);
+
+qdraw({barplot(activities.sir, las=2, cex.name=0.5)}, width = 12, height = 4, file=insert(pdf.fname, c("spectrum", "sir-mutopp")));
 
 message("Cosine similarity: ", cos_sim(sig, activities.sir))
 message("Jensen-Shannon Divergence: ", jsd(sig, activities.sir))
