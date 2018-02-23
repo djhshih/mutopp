@@ -33,6 +33,8 @@ pub fn resample_factor_distrib(factor: &[usize], target: &[f64], min_freq: f64, 
         *x /= total;
     }
 
+    println!("Observed spectrum: {:?}", observed);
+
     // calculate value m s.t. target[j] / (m * observed[j]) < 1 for all j
     // the acceptance probability is 1/m
     let mut m = 0.0;
@@ -58,9 +60,11 @@ pub fn resample_factor_distrib(factor: &[usize], target: &[f64], min_freq: f64, 
                 ys.push(i);
             }
         }
-    }
 
-    ys
+        ys
+    } else {
+        (0..n).collect()
+    }
 }
 
 /// Sample k from n elements with replacement.

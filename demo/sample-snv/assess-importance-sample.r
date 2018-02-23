@@ -149,7 +149,18 @@ message("");
 
 message("Sampling importance resampling from mutopp")
 
-y <- x[sample.int(nrow(x), nsubsample, replace=FALSE, prob = norm.weights), ];
+y <- qread(sample.fn);
+
+{
+	flip <- y$ref %in% c("C", "T");
+	ref_ns <- ifelse(flip, as.character(y$ref), complement(y$ref));
+	alt_ns <- ifelse(flip, as.character(y$alt), complement(y$alt));
+
+	mutation <- paste0(ref_ns, ">", alt_ns);
+
+	y$channel <- factor(paste0(mutation, "_", y$context), levels=channel.levels);
+	stopifnot(!is.na(y$channel))
+}
 
 activities.sir <- table(y$channel);
 stopifnot(names(sig) == names(activities.sir))

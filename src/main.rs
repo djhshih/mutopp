@@ -1146,7 +1146,7 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
 
     let mut rng = rand::thread_rng();
 
-    let size_factor = 100;
+    let size_factor = 10;
 
     // number of importance samples
     let nsamples_imp = (nsamples * size_factor) as usize;
@@ -1295,7 +1295,7 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
 
     // refine the sample using rejection sampling
     let channel_values: Vec<usize> = sample_idx.iter().map(|&i| snvs[i].channel).collect();
-    let accept_idx = sample::resample_factor_distrib(&channel_values, &mutspec.0, 0.1, &mut rng);
+    let accept_idx = sample::resample_factor_distrib(&channel_values, &mutspec.0, 0.01, &mut rng);
 
     println!("Accepted {} samples after rejection sampling", accept_idx.len());
 
