@@ -12,6 +12,57 @@ pub fn sample(prob: &[f64], k: usize, replace: bool, mut rng: &mut rand::Rng) ->
     }
 }
 
+/// Resample elements s.t. the distribution of a factor variable matches a target distribution,
+/// using rejection sampling.
+/// factor[i] contains factor value for observation i
+/// target is the target distribution for the factor
+/// min_freq is the minimum observed frequency to match
+pub fn resample_factor_distrib(factor: &[usize], target: &[f64], min_freq: f64, mut rng: &mut rand::Rng) -> Vec<usize> {
+    // number of observations
+    let n =  factor.len();
+    // number of factor levels
+    let p = target.len();
+    
+    // calculate the observed distribution of factor values
+    let mut observed = vec![0 as f64; p];
+    for &f in factor.iter() {
+        observed[f] += 1.0;
+    }
+    let total: f64 = observed.iter().sum();
+    for x in observed.iter_mut() {
+        *x /= total;
+    }
+
+    // calculate value m s.t. target[j] / (m * observed[j]) < 1 for all j
+    // the acceptance probability is 1/m
+    let mut m = 0.0;
+    for j in 0..p {
+        // if any factor frequency has very low frequency, there is little
+        // we can do about it, since we cannot draw new samples;
+        // therefore, we do the best we can to match frequencies of other factor values
+        if observed[j] > min_freq {
+            let s = target[j] / observed[j];
+            if s > m {
+                m = s;
+            }
+        }
+    }
+
+    let mut ys: Vec<usize> = Vec::with_capacity(n);
+    if m > 0.0 {
+        let r = rand::distributions::Range::new(0.0, 1.0);
+        for (i, &f) in factor.iter().enumerate() {
+            let u = r.ind_sample(&mut rng);
+            if u < target[f] / (observed[f] * m) {
+                // accept sample
+                ys.push(i);
+            }
+        }
+    }
+
+    ys
+}
+
 /// Sample k from n elements with replacement.
 // TODO replace with more efficient algorithm
 fn sample_replace(prob: &[f64], k: usize, mut rng: &mut rand::Rng) -> Vec<usize> {

@@ -1291,19 +1291,17 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
     // which we use to resample the SNVs
     let sample_idx = sample::sample(&weights, nsamples, false, &mut rng);
 
-    // count mutations in each channels for the resampled data
-    let mut counts = vec![0 as u64; mutation::genomic::MutSpec::len()];
-    for &i in sample_idx.iter() {
-        counts[ snvs[i].channel ] += 1;
-    }
-    let mut counts_sum = 0.0;
-    for &c in counts.iter() {
-        counts_sum += c as f64;
-    }
+    println!("Jensen-Shannon Divergence (before rejection): {}", evaluate_sample(&sample_idx, &snvs, &mutspec.0));
 
-    // observed mutation spectrum in the resampled data
-    let mutspec_sample: Vec<f64> = counts.iter().map(|&x| (x as f64) / counts_sum).collect();
-    println!("Jensen-Shannon Divergence: {}", stats::js_divergence(&mutspec.0, &mutspec_sample));
+    // refine the sample using rejection sampling
+    let channel_values: Vec<usize> = sample_idx.iter().map(|&i| snvs[i].channel).collect();
+    let accept_idx = sample::resample_factor_distrib(&channel_values, &mutspec.0, 0.1, &mut rng);
+
+    println!("Accepted {} samples after rejection sampling", accept_idx.len());
+
+    let sample_idx: Vec<usize> = accept_idx.iter().map(|&a| sample_idx[a]).collect();
+
+    println!("Jensen-Shannon Divergence (after rejection): {}", evaluate_sample(&sample_idx, &snvs, &mutspec.0));
 
     // write resampled SNVs to file 
 
@@ -1340,3 +1338,21 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
 
     Ok(())
 }
+
+fn evaluate_sample(sample_idx: &[usize], snvs: &[MutSpecSnv], target: &[f64]) -> f64 {
+    // count mutations in each channels for the resampled data
+    let mut counts = vec![0 as u64; mutation::genomic::MutSpec::len()];
+    for &i in sample_idx.iter() {
+        counts[ snvs[i].channel ] += 1;
+    }
+    let mut counts_sum = 0.0;
+    for &c in counts.iter() {
+        counts_sum += c as f64;
+    }
+
+    // observed mutation spectrum in the resampled data
+    let mutspec_sample: Vec<f64> = counts.iter().map(|&x| (x as f64) / counts_sum).collect();
+
+    stats::js_divergence(target, &mutspec_sample)
+}
+
