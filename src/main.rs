@@ -680,7 +680,7 @@ impl Genes {
         Ok(())
     }
     
-    pub fn write_counts(&self, mut snv: &mut SnvReader, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File, aggregate: bool) -> io::Result<()> {
+    pub fn write_counts(&self, snv: &mut SnvReader, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File, aggregate: bool) -> io::Result<()> {
         use std::io::Write;
         
         let sep = "\t";
@@ -737,7 +737,7 @@ impl Genes {
     }
     
     /// Write mutation annotations to file.
-    pub fn write_annotations(&self, mut snv: &mut SnvReader, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File) -> io::Result<()> {
+    pub fn write_annotations(&self, snv: &mut SnvReader, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File) -> io::Result<()> {
         use std::io::Write;
         
         let sep = "\t";
@@ -1006,7 +1006,7 @@ impl Regions {
         Regions { inner: sorted }
     }
 
-    pub fn write_counts(&self, snv: &mut SnvReader, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File, aggregate: bool) -> io::Result<()> {
+    pub fn write_counts(&self, snv: &mut SnvReader, ifasta: &mut FastaIndexedReader, out: &mut fs::File, aggregate: bool) -> io::Result<()> {
         use std::io::Write;
         
         let sep = "\t";
@@ -1069,7 +1069,7 @@ impl Regions {
         Ok(())
     }
 
-    pub fn write_opps(&self, mut ifasta: &mut FastaIndexedReader, out: &mut fs::File) -> io::Result<()> {
+    pub fn write_opps(&self, ifasta: &mut FastaIndexedReader, out: &mut fs::File) -> io::Result<()> {
         use std::io::Write;
 
         let sep = "\t";
@@ -1318,7 +1318,7 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
     try!(writeln!(out, "{}", header.join(sep)));
 
     for &i in sample_idx.iter() {
-        let MutSpecSnv { ref chrom, pos: position, nt_ref, nt_alt, nt_5p, nt_3p, _ } = snvs[i];
+        let MutSpecSnv { ref chrom, pos: position, nt_ref, nt_alt, nt_5p, nt_3p, channel: _ } = snvs[i];
 
         let mut context = vec![nt_5p, nt_ref, nt_3p];
         if nt_ref != b'C' && nt_ref  != b'T' {
