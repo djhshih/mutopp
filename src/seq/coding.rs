@@ -1,4 +1,4 @@
-use bio::utils::Strand;
+use bio_types::strand::Strand;
 
 use gene::{Gene,Transcript};
 use seq::{Nucleotide, Residue, DnaSeq, Codon, Peptide, complement};

@@ -1,4 +1,5 @@
 extern crate bio;
+extern crate bio_types;
 extern crate multimap;
 extern crate linked_hash_map;
 #[macro_use] extern crate clap;
@@ -376,10 +377,13 @@ fn main() {
                 // read only part of the fasta
                 if let Some((seqname, start, end)) = utils::parse_coordinate(&coord) {
                     //println!("{} {} {}", seqname, start, end);
-                    let mut seq: Vec<u8> = Vec::new();
-                    match ifasta.read(&seqname, start, end, &mut seq) {
+                    match ifasta.fetch(&seqname, start, end) {
                         Err(why) => panic!("{:?}", why),
-                        Ok(()) => seq::print_seq(&seq),
+                        Ok(()) => {
+                            let mut seq: Vec<u8> = Vec::new();
+                            ifasta.read(&mut seq);
+                            seq::print_seq(&seq)
+                        }
                     }
                 } else {
                     panic!("Invalid coordinate: {}", coord);
@@ -471,9 +475,10 @@ fn get_transcript_cds_from_fasta(reader: &mut FastaIndexedReader, transcript: &T
     let n = transcript.coding_regions.len();
     let mut seqs: Vec<seq::DnaSeq> = vec![Vec::new(); n];
     for (i, region) in transcript.coding_regions.iter().enumerate() {
-        if let Err(why) = reader.read(chrom, region.start - padding as u64, region.end + padding as u64, &mut seqs[i]) {
+        if let Err(why) = reader.fetch(chrom, region.start - padding as u64, region.end + padding as u64) {
             panic!("{:?}", why);
         }
+        reader.read(&mut seqs[i]);
         if strand == Strand::Reverse {
             seq::reverse_complement(&mut seqs[i]);
         }
@@ -1026,10 +1031,11 @@ impl Regions {
                 let regioned_snvs = snvs.group_by_regions(regions);
                 for (region, snvs) in regioned_snvs.iter() {
                     // get region sequence once for all snvs within region
-                    let mut seq: seq::DnaSeq = Vec::new();
-                    if let Err(why) = ifasta.read(chrom, region.start, region.end, &mut seq) {
+                    if let Err(why) = ifasta.fetch(chrom, region.start, region.end) {
                         panic!("{:?}", why);
                     }
+                    let mut seq: seq::DnaSeq = Vec::new();
+                    ifasta.read(&mut seq);
                     let seq = seq::genomic::Sequence{ inner: seq };
 
                     // count all mutations in region
@@ -1082,10 +1088,11 @@ impl Regions {
         for (chrom, regions) in self.inner.iter() {
             print!("{} ... ", chrom);
             for region in regions.iter() {
-                let mut seq: seq::DnaSeq = Vec::new();
-                if let Err(why) = ifasta.read(chrom, region.start, region.end, &mut seq) {
+                if let Err(why) = ifasta.fetch(chrom, region.start, region.end) {
                     panic!("{:?}", why);
                 }
+                let mut seq: seq::DnaSeq = Vec::new();
+                ifasta.read(&mut seq);
                 let seq = seq::genomic::Sequence{ inner: seq };
                 seq.accumulate_opp(&mut opp);
             }
@@ -1190,10 +1197,11 @@ fn write_snv_sample(mut ifasta: &mut FastaIndexedReader, genes: &Genes, mutspec:
         //println!("Sampled position: {}", position);
 
         // read reference nucleotide at position
-        let mut seq: seq::DnaSeq = vec![b'N'; 1];
-        if let Err(why) = ifasta.read(&gene.chrom, position - 1, position + 2, &mut seq) {
+        if let Err(why) = ifasta.fetch(&gene.chrom, position - 1, position + 2) {
             panic!("{:?}", why);
         }
+        let mut seq: seq::DnaSeq = vec![b'N'; 1];
+        ifasta.read(&mut seq);
 
         let nt_5p = seq[0];
         let nt_ref = seq[1];

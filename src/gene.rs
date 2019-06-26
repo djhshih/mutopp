@@ -1,5 +1,5 @@
 pub use linked_hash_map::LinkedHashMap;
-pub use bio::utils::Strand;
+pub use bio_types::strand::Strand;
 
 pub type Pos = u64;
 
