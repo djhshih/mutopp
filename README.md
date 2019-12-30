@@ -1,6 +1,6 @@
 # mutopp
 
-Tool for counting mutations and enumerating mutation opportunities.
+Tool for categorizing mutations and enumerating mutation opportunities.
 
 ## Dependencies
 
